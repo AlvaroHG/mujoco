@@ -385,6 +385,9 @@ filament::VertexBuffer* CreateVertexBuffer(filament::Engine* engine,
       case MeshType::kHeightField:
         mju_error("Height fields do not support UV coordinates.");
         return nullptr;
+      default:
+        mju_error("Unknown mesh type");
+        return nullptr;
     }
   } else {
     using VertexType = VertexNoUv;
@@ -401,6 +404,9 @@ filament::VertexBuffer* CreateVertexBuffer(filament::Engine* engine,
         return CreateVertexBuffer<VertexType>(engine, model, id, vertex_count,
                                               FillHeightFieldBuffer);
         break;
+      default:
+        mju_error("Unknown mesh type");
+        return nullptr;
     }
   }
 }

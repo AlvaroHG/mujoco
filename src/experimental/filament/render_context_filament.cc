@@ -20,6 +20,8 @@
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <unistd.h>
+#include <sys/syscall.h>
 
 #include <mujoco/mjmodel.h>
 #include <mujoco/mjrender.h>
@@ -43,9 +45,16 @@ static int DefaultLoadAsset(const char* asset_filename, void* user_data,
   std::filesystem::path full_path;
   full_path.append("filament/assets/data");
   full_path.append(asset_filename);
+  
+  printf("[DefaultLoadAsset] Loading: %s\n", asset_filename);
+  printf("[DefaultLoadAsset] Full path: %s\n", full_path.c_str());
+  std::error_code ec;
+  bool exists = std::filesystem::exists(full_path, ec);
+  printf("[DefaultLoadAsset] File exists: %d\n", exists);
 
   std::ifstream file(full_path, std::ios::binary);
   if (!file) {
+    printf("[DefaultLoadAsset] Failed to open file: %s\n", full_path.c_str());
     mju_error("File does not exist: %s", full_path.c_str());
     return 1;
   }
@@ -79,22 +88,59 @@ void mjr_defaultFilamentConfig(mjrFilamentConfig* config) {
 
 void mjr_makeFilamentContext(const mjModel* m, mjrContext* con,
                              const mjrFilamentConfig* config) {
+  fflush(stdout);
+  printf("[Filament] mjr_makeFilamentContext ENTRY\n");
+  fflush(stdout);
+  printf("[Filament] Model: %p, Context: %p, Config: %p\n", m, con, config);
+  fflush(stdout);
   // TODO: Support multiple contexts and multiple threads. For now, we'll just
   // assume a single, global context.
   if (g_filament_context != nullptr) {
     mju_error("Context already exists!");
   }
-  g_filament_context = new mujoco::FilamentContext(config, m, con);
+  printf("[Filament] Creating FilamentContext...\n");
+  
+  try {
+    g_filament_context = new mujoco::FilamentContext(config, m, con);
+    printf("[Filament] FilamentContext created successfully\n");
+  } catch (const std::exception& e) {
+    printf("[Filament] FilamentContext creation FAILED: %s\n", e.what());
+    fflush(stdout);
+    mju_error("Failed to create Filament context: %s", e.what());
+  } catch (...) {
+    printf("[Filament] FilamentContext creation FAILED with unknown exception\n");
+    fflush(stdout);
+    mju_error("Failed to create Filament context: unknown exception");
+  }
 }
 
 void mjr_defaultContext(mjrContext* con) { memset(con, 0, sizeof(mjrContext)); }
 
 void mjr_makeContext(const mjModel* m, mjrContext* con, int fontscale) {
+  const char msg[] = "[DIRECT] mjr_makeContext CALLED\n";
+  // Suppress unused result warning for debugging
+  ssize_t result = write(STDERR_FILENO, msg, sizeof(msg));
+  (void)result;  // Mark as intentionally unused
+  syscall(SYS_write, STDERR_FILENO, "[SYS] Direct write via syscall\n", 33);
+  
+  fprintf(stderr, "[STDERR] mjr_makeContext ENTRY - model=%p, context=%p, fontscale=%d\n", m, con, fontscale);
+  fflush(stderr);
+  fflush(stdout);
+  printf("[Filament] mjr_makeContext ENTRY - model=%p, context=%p, fontscale=%d\n", m, con, fontscale);
+  fflush(stdout);
   mjr_freeContext(con);
+  printf("[Filament] Context freed\n");
+  fflush(stdout);
   mjrFilamentConfig cfg;
   mjr_defaultFilamentConfig(&cfg);
+  printf("[Filament] Config created\n");
+  fflush(stdout);
   cfg.load_asset = DefaultLoadAsset;
+  printf("[Filament] Load asset callback set\n");
+  fflush(stdout);
   mjr_makeFilamentContext(m, con, &cfg);
+  printf("[Filament] mjr_makeContext RETURNS successfully\n");
+  fflush(stdout);
 }
 
 void mjr_freeContext(mjrContext* con) {

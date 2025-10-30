@@ -79,12 +79,18 @@ ObjectManager::ObjectManager(const mjModel* model, filament::Engine* engine,
   shapes_[kSphere] = CreateSphere(engine_, model_);
 
   auto LoadMaterial = [this](const char* filename) {
+    printf("[ObjectManager] Loading material: %s\n", filename);
     Asset asset(filename, config_);
+    printf("[ObjectManager] Loaded asset, size: %llu\n", (unsigned long long)asset.size);
     filament::Material::Builder material_builder;
     material_builder.package(asset.payload, asset.size);
-    return material_builder.build(*this->engine_);
+    printf("[ObjectManager] Building material...\n");
+    auto* material = material_builder.build(*this->engine_);
+    printf("[ObjectManager] Material built: %p\n", (void*)material);
+    return material;
   };
 
+  printf("[ObjectManager] Loading PBR material...\n");
   materials_[kPbr] = LoadMaterial("pbr.filamat");
   materials_[kPbrPacked] = LoadMaterial("pbr_packed.filamat");
   materials_[kPhong2d] = LoadMaterial("phong_2d.filamat");
@@ -118,12 +124,14 @@ ObjectManager::ObjectManager(const mjModel* model, filament::Engine* engine,
   fallback_normal_ = Create2dTexture(engine_, 1, 1, 3, normal_data, false);
   static uint8_t orm_data[3] = {0, 255, 0};
   fallback_orm_ = Create2dTexture(engine_, 1, 1, 3, orm_data, false);
-
+  
+  // For PBR materials, we need white fallback for RGB/Occlusion to prevent black output
+  // Black fallback causes material.baseColor *= texture() to become zero
   fallback_textures_[mjTEXROLE_USER] = fallback_black_;
-  fallback_textures_[mjTEXROLE_RGB] = fallback_black_;
-  fallback_textures_[mjTEXROLE_OCCLUSION] = fallback_black_;
+  fallback_textures_[mjTEXROLE_RGB] = fallback_white_;  // Changed from black to white
+  fallback_textures_[mjTEXROLE_OCCLUSION] = fallback_white_;  // Changed from black to white (1.0 = no occlusion)
   fallback_textures_[mjTEXROLE_ROUGHNESS] = fallback_white_;
-  fallback_textures_[mjTEXROLE_METALLIC] = fallback_black_;
+  fallback_textures_[mjTEXROLE_METALLIC] = fallback_black_;  // Keep black for metallic (0 = non-metallic)
   fallback_textures_[mjTEXROLE_NORMAL] = fallback_normal_;
   fallback_textures_[mjTEXROLE_EMISSIVE] = fallback_black_;
   fallback_textures_[mjTEXROLE_ORM] = fallback_orm_;
@@ -354,10 +362,11 @@ filament::IndirectLight* ObjectManager::LoadFallbackIndirectLight(
   filament::math::float3 spherical_harmonics[9];
   filament::Texture* tex =
       CreateKtxTexture(engine_, asset.payload, asset.size, spherical_harmonics);
+  // Note: KTX files already contain mipmaps, so we don't need to generate them
   // TODO: Revisit this to make it this work in WebGL
-  #ifndef __EMSCRIPTEN__
-  tex->generateMipmaps(*engine_);
-  #endif
+  // #ifndef __EMSCRIPTEN__
+  // tex->generateMipmaps(*engine_);
+  // #endif
 
   return CreateIndirectLight(tex, &spherical_harmonics, intensity);
 }

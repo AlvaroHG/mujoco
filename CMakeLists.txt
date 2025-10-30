@@ -24,7 +24,7 @@ set(CMAKE_POLICY_DEFAULT_CMP0072 NEW)
 # Avoid BUILD_SHARED_LIBS getting overridden by an option() in ccd.
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
-# This line has to appear before 'PROJECT' in order to be able to disable incremental linking
+# this line has to appear before 'PROJECT' in order to be able to disable incremental linking?
 set(MSVC_INCREMENTAL_DEFAULT ON)
 
 project(
@@ -41,12 +41,10 @@ list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 option(MUJOCO_BUILD_EXAMPLES "Build samples for MuJoCo" ON)
 option(MUJOCO_BUILD_SIMULATE "Build simulate library for MuJoCo" ON)
-option(MUJOCO_BUILD_STUDIO "Build studio library for MuJoCo" OFF)
 option(MUJOCO_BUILD_TESTS "Build tests for MuJoCo" ON)
 option(MUJOCO_TEST_PYTHON_UTIL "Build and test utility libraries for Python bindings" ON)
 option(MUJOCO_WITH_USD "Build with OpenUSD" OFF)
-option(MUJOCO_USE_FILAMENT "Use filament rendering" OFF)
-option(MUJOCO_USE_FILAMENT_VULKAN "Use vulkan backend for filament rendering" OFF)
+option(MUJOCO_WITH_FILAMENT "Build with Filament renderer" OFF)
 
 # Option to provide a path to an existing USD build directory or to Houdini HFS directory.
 set(USD_DIR "" CACHE PATH "Path to an existing USD build directory.")
@@ -65,6 +63,27 @@ elseif(HOUDINI_HFS_DIR)
     set(MUJOCO_WITH_USD ON CACHE BOOL "Build with OpenUSD" FORCE)
     message(STATUS "Building Mujoco USD against Houdini HFS: ${HOUDINI_HFS_DIR}")
   endif()
+endif()
+
+# option for a path to filament build 
+set(FILAMENT_DIR "" CACHE PATH "Path to Filament build directory (should contain filament/ directory with source)")
+if(FILAMENT_DIR)
+  if(EXISTS "${FILAMENT_DIR}")
+    set(MUJOCO_WITH_FILAMENT ON CACHE BOOL "Build with Filament" FORCE)
+    set(FILAMENT_SOURCE_DIR "${FILAMENT_DIR}")
+    # Default to ../filament/build for binary directory if not explicitly set
+    if(NOT DEFINED FILAMENT_BINARY_DIR)
+      set(FILAMENT_BINARY_DIR "${FILAMENT_DIR}/..")
+    endif()
+    message(STATUS "Using Filament at: ${FILAMENT_SOURCE_DIR}")
+    message(STATUS "Using Filament build directory: ${FILAMENT_BINARY_DIR}")
+  else()
+    message(WARNING "Invalid path provided for FILAMENT_DIR: ${FILAMENT_DIR}")
+    set(MUJOCO_WITH_FILAMENT OFF CACHE BOOL "Build with Filament" FORCE)
+  endif()
+elseif(MUJOCO_WITH_FILAMENT)
+  message(WARNING "MUJOCO_WITH_FILAMENT is ON but FILAMENT_DIR is not set. Disabling Filament support.")
+  set(MUJOCO_WITH_FILAMENT OFF CACHE BOOL "Build with Filament" FORCE)
 endif()
 
 if(APPLE AND (MUJOCO_BUILD_EXAMPLES OR MUJOCO_BUILD_SIMULATE))
@@ -115,20 +134,9 @@ add_subdirectory(plugin/sdf)
 add_subdirectory(src/engine)
 add_subdirectory(src/user)
 add_subdirectory(src/xml)
+add_subdirectory(src/render)
 add_subdirectory(src/thread)
-
-if(MUJOCO_USE_FILAMENT)
-  # Note that, by default, the "src/render" and "src/ui" code is added directly
-  # into the "mujoco" target. However, "mujoco::filament" is a separate,
-  # explicit target. Therefore, if you want to use MuJoCo with Filament, you
-  # will need to explicitly add the "mujoco::filament" target as a link
-  # dependency in your project.
-  add_subdirectory(src/experimental/filament)
-else()
-  add_subdirectory(src/render)
-  add_subdirectory(src/ui)
-endif()
-
+add_subdirectory(src/ui)
 
 target_compile_definitions(mujoco PRIVATE _GNU_SOURCE CCD_STATIC_DEFINE MUJOCO_DLL_EXPORTS -DMC_IMPLEM_ENABLE)
 if(MUJOCO_ENABLE_AVX_INTRINSICS)
@@ -212,11 +220,6 @@ if(MUJOCO_BUILD_SIMULATE)
   add_subdirectory(simulate)
 endif()
 
-if(MUJOCO_BUILD_STUDIO)
-  add_subdirectory(src/experimental/toolbox)
-  add_subdirectory(src/experimental/studio)
-endif()
-
 if(MUJOCO_BUILD_EXAMPLES)
   add_subdirectory(sample)
 endif()
@@ -224,6 +227,12 @@ endif()
 if(MUJOCO_WITH_USD)
   target_compile_definitions(mujoco PUBLIC mjUSEUSD)
   add_subdirectory(src/experimental/usd)
+endif()
+
+# compile mujoco filament integration
+if(MUJOCO_WITH_FILAMENT)
+  target_compile_definitions(mujoco PUBLIC mjUSEFILAMENT)
+  add_subdirectory(src/experimental/filament)
 endif()
 
 if(BUILD_TESTING AND MUJOCO_BUILD_TESTS)

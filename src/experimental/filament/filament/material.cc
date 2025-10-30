@@ -49,11 +49,16 @@ Material::~Material() noexcept {
 void Material::SetNormalMaterialType(
     ObjectManager::MaterialType material_type) {
   filament::Material* material = object_mgr_->GetMaterial(material_type);
+  
+  printf("[Material::SetNormalMaterialType] type=%d, material=%p\n", 
+         material_type, (void*)material);
 
   if (instances_[kNormal]) {
     const filament::Material* current_material =
         instances_[kNormal]->getMaterial();
+    printf("  Current material: %p\n", (void*)current_material);
     if (current_material == material) {
+      printf("  Same material, skipping\n");
       return;
     }
 
@@ -79,13 +84,25 @@ void Material::UpdateTextures(const Textures& textures) {
 void Material::UpdateMaterialInstances() {
   filament::MaterialInstance* instance = instances_[DrawMode::kNormal];
   if (instance == nullptr) {
+    printf("[Material::UpdateMaterialInstances] No instance!\n");
     return;
   }
 
   const filament::Material* material = instance->getMaterial();
+  printf("[Material::UpdateMaterialInstances] material=%p\n", (void*)material);
+  
+  printf("  Checking parameters: BaseColor=%d, Normal=%d, ORM=%d, Metallic=%d, Roughness=%d\n",
+         material->hasParameter("BaseColor") ? 1 : 0,
+         material->hasParameter("Normal") ? 1 : 0,
+         material->hasParameter("ORM") ? 1 : 0,
+         material->hasParameter("Metallic") ? 1 : 0,
+         material->hasParameter("Roughness") ? 1 : 0);
+  
   if (material->hasParameter("BaseColorFactor")) {
     instance->setParameter("BaseColorFactor", filament::RgbaType::sRGB,
                            params_.color);
+    printf("[Material::UpdateMaterialInstances] Set BaseColorFactor: [%.3f %.3f %.3f %.3f]\n",
+           params_.color.x, params_.color.y, params_.color.z, params_.color.w);
   }
   if (material->hasParameter("EmissiveFactor")) {
     instance->setParameter("EmissiveFactor",
@@ -128,9 +145,11 @@ void Material::UpdateMaterialInstances() {
   if (material->hasParameter("BaseColor")) {
     if (textures_.color) {
       instance->setParameter("BaseColor", textures_.color, sampler);
+      printf("[Material::UpdateMaterialInstances] Set BaseColor texture: %p\n", (void*)textures_.color);
     } else {
       auto* fallback = object_mgr_->GetFallbackTexture(mjTEXROLE_RGB);
       instance->setParameter("BaseColor", fallback, sampler);
+      printf("[Material::UpdateMaterialInstances] Using fallback BaseColor texture\n");
     }
   }
   if (material->hasParameter("Normal")) {

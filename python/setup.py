@@ -192,6 +192,9 @@ class BuildCMakeExtension(build_ext.build_ext):
   def _copy_external_libraries(self):
     dst = os.path.dirname(self.get_ext_fullpath(self.extensions[0].name))
     for directory, _, filenames in os.walk(os.environ[MUJOCO_PATH]):
+      # Skip if this is the destination directory
+      if os.path.abspath(directory) == os.path.abspath(dst):
+        continue
       for pattern in get_external_lib_patterns():
         for filename in fnmatch.filter(filenames, pattern):
           shutil.copyfile(

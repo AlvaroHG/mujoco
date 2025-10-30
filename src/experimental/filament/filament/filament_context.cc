@@ -48,12 +48,18 @@ namespace mujoco {
 FilamentContext::FilamentContext(const mjrFilamentConfig* config,
                                  const mjModel* model, mjrContext* con)
     : config_(*config), context_(con), model_(model) {
+  printf("[Filament] Starting FilamentContext construction\n");
+  printf("[Filament] Model: ntex=%d, ngeom=%d, nbody=%d\n", 
+         model_ ? model_->ntex : -1, model_ ? model_->ngeom : -1, model_ ? model_->nbody : -1);
+  
 #if defined( __EMSCRIPTEN__)
   filament::Engine::Backend backend = filament::Engine::Backend::OPENGL;
 #else
   filament::Engine::Backend backend = filament::Engine::Backend::VULKAN;
 #endif
 
+  printf("[Filament] Backend: %d\n", (int)backend);
+  
   switch (config_.graphics_api) {
     case mjGFX_DEFAULT:
       // Use the default based on the platform above.
@@ -68,8 +74,23 @@ FilamentContext::FilamentContext(const mjrFilamentConfig* config,
       mju_error("Unsupported graphics API: %d", config_.graphics_api);
   }
 
-  engine_ = filament::Engine::create(backend);
+  printf("[Filament] Creating engine with backend %d...\n", (int)backend);
+  
+  // Engine creation might spawn threads that can crash
+  try {
+    engine_ = filament::Engine::create(backend);
+    printf("[Filament] Engine created successfully\n");
+  } catch (const std::exception& e) {
+    printf("[Filament] Engine creation FAILED: %s\n", e.what());
+    throw;
+  } catch (...) {
+    printf("[Filament] Engine creation FAILED with unknown exception\n");
+    throw;
+  }
+  
+  printf("[Filament] Creating renderer...\n");
   renderer_ = engine_->createRenderer();
+  printf("[Filament] Renderer created\n");
   #ifdef __EMSCRIPTEN__
     swap_chain_ = engine_->createSwapChain(nullptr);
   #else
@@ -82,14 +103,18 @@ FilamentContext::FilamentContext(const mjrFilamentConfig* config,
   }
   #endif
 
+  printf("[Filament] Creating object manager...\n");
   object_manager_ = std::make_unique<ObjectManager>(model, engine_, config);
+  printf("[Filament] Object manager created\n");
 
   // Set clear options.
+  printf("[Filament] Setting clear options...\n");
   filament::Renderer::ClearOptions opts;
   opts.clear = true;
   opts.discard = true;
   opts.clearColor = {0.1, 0.1, 0.1, 1};
   renderer_->setClearOptions(opts);
+  printf("[Filament] Clear options set\n");
 
   // Copy parameters from model to context.
   if (model_) {
@@ -109,15 +134,25 @@ FilamentContext::FilamentContext(const mjrFilamentConfig* config,
     context_->shadowSize = model_->vis.quality.shadowsize;
     context_->readPixelFormat = 0x1907;  // 0x1907 = GL_RGB;
     context_->ntexture = model_->ntex;
-    for (int i = 0; i < model_->ntex; ++i) {
+    // Only copy texture types if we have textures and they fit in the array
+    int max_textures = mjMAXTEXTURE;
+    if (model_->ntex > max_textures) {
+      context_->ntexture = max_textures;
+    }
+    for (int i = 0; i < context_->ntexture; ++i) {
       context_->textureType[i] = model_->tex_type[i];
     }
   }
 
+  printf("[Filament] Creating scene view...\n");
   scene_view_ = std::make_unique<SceneView>(engine_, object_manager_.get());
+  printf("[Filament] Scene view created\n");
   if (config_.enable_gui) {
+    printf("[Filament] Creating GUI view...\n");
     gui_view_ = std::make_unique<GuiView>(engine_, object_manager_.get());
+    printf("[Filament] GUI view created\n");
   }
+  printf("[Filament] FilamentContext construction complete\n");
 }
 
 FilamentContext::~FilamentContext() {

@@ -53,7 +53,8 @@ void mjr_text(int font, const char* txt, const mjrContext* con, float x,
 }
 void mjr_overlay(int font, int gridpos, mjrRect viewport, const char* overlay,
                  const char* overlay2, const mjrContext* con) {
-  mju_error("mjr_overlay not implemented.");
+  // Not implemented for Filament renderer yet - skip overlay rendering
+  // This is used for text overlays like timestamps
 }
 void mjr_label(mjrRect viewport, int font, const char* txt, float r, float g,
                float b, float a, float rt, float gt, float bt,
@@ -67,12 +68,14 @@ void mjr_finish() {
   mju_error("mjr_finish not implemented.");
 }
 int mjr_getError() {
-  mju_error("mjr_getError not implemented.");
+  // Return 0 = no error
   return 0;
 }
 mjrRect mjr_maxViewport(const mjrContext* con) {
-  mju_error("mjr_maxViewport not implemented.");
-  return mjrRect{};
+  // Return the offscreen dimensions as the maximum viewport
+  // For window rendering, window size would be handled elsewhere
+  mjrRect res = {0, 0, con->offWidth, con->offHeight};
+  return res;
 }
 int mjr_findRect(int x, int y, int nrect, const mjrRect* rect) {
   mju_error("mjr_findRect not implemented.");

@@ -4,7 +4,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     https://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,125 +12,155 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.16)
-
-set(MUJOCO_FILAMENT_TARGET_NAME mujoco_filament)
-
-add_library(${MUJOCO_FILAMENT_TARGET_NAME} STATIC)
-
-target_sources(${MUJOCO_FILAMENT_TARGET_NAME}
-    PUBLIC
-        stubs.cc
-        render_context_filament.h
-        render_context_filament.cc
-        filament/buffer_util.cc
-        filament/buffer_util.h
-        filament/builtins.cc
-        filament/builtins.h
-        filament/color_grading_options.cc
-        filament/color_grading_options.h
-        filament/drawable.cc
-        filament/drawable.h
-        filament/filament_context.cc
-        filament/filament_context.h
-        filament/geom_util.cc
-        filament/geom_util.h
-        filament/gui_view.cc
-        filament/gui_view.h
-        filament/imgui_editor.cc
-        filament/imgui_editor.h
-        filament/light.cc
-        filament/light.h
-        filament/material.cc
-        filament/material.h
-        filament/math_util.h
-        filament/model_util.cc
-        filament/model_util.h
-        filament/object_manager.cc
-        filament/object_manager.h
-        filament/renderables.cc
-        filament/renderables.h
-        filament/scene_view.cc
-        filament/scene_view.h
-        filament/texture_util.cc
-        filament/texture_util.h
-        filament/vertex_util.cc
-        filament/vertex_util.h
-)
-target_include_directories(${MUJOCO_FILAMENT_TARGET_NAME}
-    PUBLIC
-        ${PROJECT_SOURCE_DIR}/include
-        ${PROJECT_SOURCE_DIR}/src
+set(FILAMENT_EXPERIMENTAL_SRCS
+    render_context_filament.cc
+    render_context_filament.h
+    filament/buffer_util.cc
+    filament/buffer_util.h
+    filament/builtins.cc
+    filament/builtins.h
+    filament/color_grading_options.cc
+    filament/color_grading_options.h
+    filament/drawable.cc
+    filament/drawable.h
+    filament/filament_context.cc
+    filament/filament_context.h
+    filament/geom_util.cc
+    filament/geom_util.h
+    filament/gui_view.cc
+    filament/gui_view.h
+    filament/imgui_editor.cc
+    filament/imgui_editor.h
+    filament/light.cc
+    filament/light.h
+    filament/material.cc
+    filament/material.h
+    filament/math_util.h
+    filament/model_util.cc
+    filament/model_util.h
+    filament/object_manager.cc
+    filament/object_manager.h
+    filament/renderables.cc
+    filament/renderables.h
+    filament/scene_view.cc
+    filament/scene_view.h
+    filament/texture_util.cc
+    filament/texture_util.h
+    filament/vertex_util.cc
+    filament/vertex_util.h
+    stubs.cc
 )
 
-include(third_party_deps/dear_imgui)
-include(third_party_deps/filament)
-target_link_libraries(${MUJOCO_FILAMENT_TARGET_NAME}
-    dear_imgui
-    filament
-    image       # provided by filament
-    ktxreader   # provided by filament
-)
+target_sources(mujoco PRIVATE ${FILAMENT_EXPERIMENTAL_SRCS})
 
-add_library(mujoco::filament ALIAS ${MUJOCO_FILAMENT_TARGET_NAME})
+# disable specific warnings for filament sources (since filament uses patterns that trigger pedantic warnings)
+# this suppresses pedantic warnings for anonymous structs and strict aliasing
+# which are acceptable in filament
+# note: These warnings apply to all files added by this CMakeLists.txt, maybe this is wrong?
+get_target_property(CURRENT_COMPILE_OPTIONS mujoco COMPILE_OPTIONS)
+if(NOT CURRENT_COMPILE_OPTIONS)
+    set(CURRENT_COMPILE_OPTIONS)
+endif()
+list(APPEND CURRENT_COMPILE_OPTIONS "-Wno-pedantic" "-Wno-strict-aliasing" "-Wno-deprecated-declarations" "-Wno-implicit-exception-spec-mismatch" "-Wno-unused-private-field")
+set_target_properties(mujoco PROPERTIES COMPILE_OPTIONS "${CURRENT_COMPILE_OPTIONS}")
 
-# The "mujoco::filament" library needs access to some assets (e.g. filament
-# material shaders) in order to do rendering. As such, you must also include
-# the assets under MUJOCO_FILAMENT_ASSETS_DIR in your project. As part of
-# the filament library configuration, you will provide a function that the
-# library will use to load these assets.
-set(ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets")
-set(OUTPUT_ASSETS_DIR "${CMAKE_CURRENT_BINARY_DIR}/assets")
-file(MAKE_DIRECTORY ${OUTPUT_ASSETS_DIR})
-file(COPY
-    "${ASSETS_DIR}/ibl.ktx"
-    DESTINATION ${OUTPUT_ASSETS_DIR}
-)
+# set up Filament include directories
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/filament/include)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR})
 
-set(MATC_EXECUTABLE matc)
-set(MATERIAL_FILES
-    pbr.mat
-    pbr_packed.mat
-    phong_2d_fade.mat
-    phong_2d.mat
-    phong_2d_uv_fade.mat
-    phong_2d_uv.mat
-    phong_color_fade.mat
-    phong_color.mat
-    phong_cube_fade.mat
-    phong_cube.mat
-    unlit_depth.mat
-    unlit_line.mat
-    unlit_segmentation.mat
-    unlit_ui.mat
-)
+# backend headers (both source and build locations)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/filament/backend/include)
+target_include_directories(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/filament/backend)
 
-foreach(MATERIAL_FILE ${MATERIAL_FILES})
-    get_filename_component(MATERIAL_NAME ${MATERIAL_FILE} NAME_WE)
-    set(INPUT_FILE "${ASSETS_DIR}/${MATERIAL_FILE}")
-    set(OUTPUT_FILE "${OUTPUT_ASSETS_DIR}/${MATERIAL_NAME}.filamat")
 
-    add_custom_command(
-        OUTPUT ${OUTPUT_FILE}
-        COMMAND ${MATC_EXECUTABLE}
-            --platform=all
-            --api=vulkan
-            --api=opengl
-            --variant-filter skinning
-            --optimize-size
-            --output ${OUTPUT_FILE}
-            ${INPUT_FILE}
-        DEPENDS ${INPUT_FILE}
-        DEPENDS matc
-        COMMENT "Compiling ${MATERIAL_FILE}"
-    )
 
-    list(APPEND MUJOCO_FILAMENT_ASSET_FILES ${OUTPUT_FILE})
-endforeach()
+# utils headers
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/libs/utils/include)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/libs/math/include)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/libs/camutils/include)
 
-list(APPEND MUJOCO_FILAMENT_ASSET_FILES "${OUTPUT_ASSETS_DIR}/ibl.ktx")
+# Aaditional include directories
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/libs/filament/include)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/libs/filabridge/include)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/libs/filaflat/include)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/libs/image/include)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/libs/imageio/include)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/libs/ktxreader/include)
 
-add_custom_target(mujoco_filament_assets DEPENDS ${MUJOCO_FILAMENT_ASSET_FILES})
-add_dependencies(${MUJOCO_FILAMENT_TARGET_NAME} mujoco_filament_assets)
+# third-party includes (imgui, cgltf, smol-v)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/third_party/imgui)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/third_party/cgltf)
+target_include_directories(mujoco PRIVATE ${FILAMENT_SOURCE_DIR}/third_party/smol-v/include)
 
-set(MUJOCO_FILAMENT_ASSETS_DIR ${OUTPUT_ASSETS_DIR})
+
+# link against Filament libraries
+# Main Filament library
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/filament/libfilament.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/filament/backend/libbackend.a)
+
+# required Filament support libraries
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/bluegl/libbluegl.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/bluevk/libbluevk.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/gltfio/libgltfio_core.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/gltfio/libgltfio.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/gltfio/libuberarchive.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/viewer/libviewer.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/filagui/libfilagui.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/imageio/libimageio.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/image/libimage.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/utils/libutils.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/camutils/libcamutils.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/iblprefilter/libfilament-iblprefilter.a)
+
+# third-party dependencies
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/math/libmath.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/filabridge/libfilabridge.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/filaflat/libfilaflat.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/ktxreader/libktxreader.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/filameshio/libfilameshio.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/generatePrefilterMipmap/libfilament-generatePrefilterMipmap.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/filamentapp/libfilamentapp.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/libs/filamentapp/libfilamentapp-resources.a)
+
+# third-party libraries
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/abseil/tnt/libfilament-abseil.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/basisu/tnt/libbasis_encoder.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/basisu/tnt/libbasis_transcoder.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/basisu/tnt/libzstd-basisu.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/civetweb/tnt/libcivetweb.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/imgui/tnt/libimgui.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/meshoptimizer/tnt/libmeshoptimizer.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/smol-v/tnt/libsmol-v.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/zstd/tnt/libzstd.a)
+# note: cgltf is header-only, no library to link
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/draco/tnt/libdracodec.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/libassimp/tnt/libassimp.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/libpng/tnt/libpng.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/libsdl2/tnt/libsdl2.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/libz/tnt/libz.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/tinyexr/tnt/libtinyexr.a)
+
+# SPIRV libraries (for shader compilation)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/glslang/tnt/glslang/libglslang.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/glslang/tnt/SPIRV/libSPIRV.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/glslang/tnt/glslang/OSDependent/Unix/libOSDependent.a)
+
+# SPIRV-Tools
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/spirv-tools/source/opt/libSPIRV-Tools-opt.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/spirv-tools/source/libSPIRV-Tools.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/spirv-tools/source/reduce/libSPIRV-Tools-reduce.a)
+
+# SPIRV-Cross
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/spirv-cross/tnt/libspirv-cross-core.a)
+target_link_libraries(mujoco PRIVATE ${FILAMENT_BINARY_DIR}/third_party/spirv-cross/tnt/libspirv-cross-glsl.a)
+
+# compile definitions
+target_compile_definitions(mujoco PRIVATE mjUSEFILAMENT)
+
+# link against libc++ to match Filament's standard library
+# (Filament was built with -stdlib=libc++ (clang))
+# Note: -stdlib=libc++ is already set in CMAKE_CXX_FLAGS for the build, so not sure if this is right, but fails without
+target_link_libraries(mujoco PRIVATE c++ c++abi)
+# statically link libgcc and libstdc++ to avoid conda libstdc++ version issues
+set_target_properties(mujoco PROPERTIES LINK_FLAGS "-static-libgcc -static-libstdc++")
+

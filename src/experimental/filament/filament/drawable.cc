@@ -291,8 +291,20 @@ void Drawable::UpdateMaterial(const mjvGeom& geom) {
   ObjectManager* object_mgr = material_.GetObjectManager();
   const mjModel* model = object_mgr->GetModel();
 
+  printf("[Drawable::UpdateMaterial] geom.type=%d, geom.matid=%d\n", geom.type, geom.matid);
+
   Material::Textures textures;
   if (geom.matid >= 0) {
+    printf("  [DEBUG] Fetching textures for matid=%d\n", geom.matid);
+    printf("  [DEBUG] Checking model->mat_texid indices (nmat=%d)...\n", model->nmat);
+    for (int role = 0; role < mjNTEXROLE; ++role) {
+      if (geom.matid < model->nmat) {
+        int idx = geom.matid * mjNTEXROLE + role;
+        int texid = model->mat_texid[idx];
+        printf("  [DEBUG] mat_texid[%d](matid=%d, role=%d)=%d\n", idx, geom.matid, role, texid);
+      }
+    }
+    
     textures.color = object_mgr->GetTexture(geom.matid, mjTEXROLE_RGB);
     textures.normal = object_mgr->GetTexture(geom.matid, mjTEXROLE_NORMAL);
     textures.emissive = object_mgr->GetTexture(geom.matid, mjTEXROLE_EMISSIVE);
@@ -300,58 +312,93 @@ void Drawable::UpdateMaterial(const mjvGeom& geom) {
     textures.metallic = object_mgr->GetTexture(geom.matid, mjTEXROLE_METALLIC);
     textures.roughness = object_mgr->GetTexture(geom.matid, mjTEXROLE_ROUGHNESS);
     textures.occlusion = object_mgr->GetTexture(geom.matid, mjTEXROLE_OCCLUSION);
+    
+    printf("  Textures: color=%p, normal=%p, emissive=%p, orm=%p, metallic=%p, roughness=%p, occlusion=%p\n",
+           textures.color, textures.normal, textures.emissive, textures.orm, 
+           textures.metallic, textures.roughness, textures.occlusion);
+    
+    printf("  mat_metallic[%d]=%.6f, mat_roughness[%d]=%.6f\n",
+           geom.matid, model->mat_metallic[geom.matid],
+           geom.matid, model->mat_roughness[geom.matid]);
   }
 
   if (geom.type == mjGEOM_LINE || geom.type == mjGEOM_LINEBOX) {
     material_.SetNormalMaterialType(ObjectManager::kUnlitLine);
+    printf("  Selected: kUnlitLine\n");
   } else {
+    bool use_pbr = false;
     if (geom.matid >= 0) {
       if (textures.orm) {
         material_.SetNormalMaterialType(ObjectManager::kPbrPacked);
+        use_pbr = true;
+        printf("  Selected: kPbrPacked (has ORM texture)\n");
       } else if (textures.metallic) {
         material_.SetNormalMaterialType(ObjectManager::kPbr);
+        use_pbr = true;
+        printf("  Selected: kPbr (has metallic texture)\n");
       } else if (textures.roughness) {
         material_.SetNormalMaterialType(ObjectManager::kPbr);
+        use_pbr = true;
+        printf("  Selected: kPbr (has roughness texture)\n");
       } else if (model->mat_metallic[geom.matid] >= 0) {
         material_.SetNormalMaterialType(ObjectManager::kPbr);
+        use_pbr = true;
+        printf("  Selected: kPbr (has mat_metallic)\n");
       } else if (model->mat_roughness[geom.matid] >= 0) {
         material_.SetNormalMaterialType(ObjectManager::kPbr);
+        use_pbr = true;
+        printf("  Selected: kPbr (has mat_roughness)\n");
+      } else {
+        printf("  No PBR conditions met, will check Phong\n");
       }
     }
 
-    // Check to see if we're dealing with a mesh with texture coordinates.
-    // `data_id` is the id of the mesh in model (i.e. the geom has mesh geometry)
-    // and `mesh_texcoordadr` stores the address of the mesh uvs if it has them.
-    bool has_texcoords = false;
-    if ((geom.type == mjGEOM_MESH || geom.type == mjGEOM_SDF) &&
-        geom.dataid >= 0 && model->mesh_texcoordadr[geom.dataid / 2] >= 0) {
-      has_texcoords = true;
-    }
+    // Only check Phong materials if PBR was not selected
+    if (!use_pbr) {
+      // Check to see if we're dealing with a mesh with texture coordinates.
+      // `data_id` is the id of the mesh in model (i.e. the geom has mesh geometry)
+      // and `mesh_texcoordadr` stores the address of the mesh uvs if it has them.
+      bool has_texcoords = false;
+      if ((geom.type == mjGEOM_MESH || geom.type == mjGEOM_SDF) &&
+          geom.dataid >= 0 && model->mesh_texcoordadr[geom.dataid / 2] >= 0) {
+        has_texcoords = true;
+      }
+      
+      printf("  has_texcoords=%d\n", has_texcoords);
 
-    if (textures.color == nullptr) {
-      if (geom.rgba[3] < 1.0f) {
-        material_.SetNormalMaterialType(ObjectManager::kPhongColorFade);
+      if (textures.color == nullptr) {
+        if (geom.rgba[3] < 1.0f) {
+          material_.SetNormalMaterialType(ObjectManager::kPhongColorFade);
+          printf("  Selected: kPhongColorFade\n");
+        } else {
+          material_.SetNormalMaterialType(ObjectManager::kPhongColor);
+          printf("  Selected: kPhongColor\n");
+        }
+      } else if (textures.color->getTarget() ==
+                filament::Texture::Sampler::SAMPLER_CUBEMAP) {
+        if (geom.rgba[3] < 1.0f) {
+          material_.SetNormalMaterialType(ObjectManager::kPhongCubeFade);
+          printf("  Selected: kPhongCubeFade\n");
+        } else {
+          material_.SetNormalMaterialType(ObjectManager::kPhongCube);
+          printf("  Selected: kPhongCube\n");
+        }
+      } else if (has_texcoords) {
+        if (geom.rgba[3] < 1.0f) {
+          material_.SetNormalMaterialType(ObjectManager::kPhong2dUvFade);
+          printf("  Selected: kPhong2dUvFade\n");
+        } else {
+          material_.SetNormalMaterialType(ObjectManager::kPhong2dUv);
+          printf("  Selected: kPhong2dUv\n");
+        }
       } else {
-        material_.SetNormalMaterialType(ObjectManager::kPhongColor);
-      }
-    } else if (textures.color->getTarget() ==
-              filament::Texture::Sampler::SAMPLER_CUBEMAP) {
-      if (geom.rgba[3] < 1.0f) {
-        material_.SetNormalMaterialType(ObjectManager::kPhongCubeFade);
-      } else {
-        material_.SetNormalMaterialType(ObjectManager::kPhongCube);
-      }
-    } else if (has_texcoords) {
-      if (geom.rgba[3] < 1.0f) {
-        material_.SetNormalMaterialType(ObjectManager::kPhong2dUvFade);
-      } else {
-        material_.SetNormalMaterialType(ObjectManager::kPhong2dUv);
-      }
-    } else {
-      if (geom.rgba[3] < 1.0f) {
-        material_.SetNormalMaterialType(ObjectManager::kPhong2dFade);
-      } else {
-        material_.SetNormalMaterialType(ObjectManager::kPhong2d);
+        if (geom.rgba[3] < 1.0f) {
+          material_.SetNormalMaterialType(ObjectManager::kPhong2dFade);
+          printf("  Selected: kPhong2dFade\n");
+        } else {
+          material_.SetNormalMaterialType(ObjectManager::kPhong2d);
+          printf("  Selected: kPhong2d\n");
+        }
       }
     }
   }

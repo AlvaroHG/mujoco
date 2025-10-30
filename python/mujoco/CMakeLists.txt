@@ -200,7 +200,8 @@ findorfetch(
 # ==================== MUJOCO PYTHON BINDINGS ==================================
 set(SIMULATE_BUILD_EXECUTABLE OFF)
 set(SIMULATE_GLFW_DYNAMIC_SYMBOLS ON)
-add_subdirectory(simulate)
+# add simulate from the parent mujoco directory, complained without it
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../simulate ${CMAKE_CURRENT_BINARY_DIR}/simulate EXCLUDE_FROM_ALL)
 
 add_subdirectory(util)
 
@@ -213,17 +214,23 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/enum_traits.h)
   add_library(enum_traits INTERFACE)
   target_sources(enum_traits INTERFACE enum_traits.h)
 else()
+  set(ENUM_TRAITS_FILE ${CMAKE_CURRENT_BINARY_DIR}/enum_traits.h)
+  # need to generate enumtraits.h if not make fails
   add_custom_command(
-    OUTPUT enum_traits.h
-    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${mujoco_SOURCE_DIR}/mujoco/python/mujoco ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/codegen/generate_enum_traits.py > enum_traits.h
+    OUTPUT ${ENUM_TRAITS_FILE}
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR} ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/codegen/generate_enum_traits.py > ${ENUM_TRAITS_FILE}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/codegen/generate_enum_traits.py
+    COMMENT "Generating enum_traits.h"
   )
-  add_library(enum_traits INTERFACE)
-  target_sources(enum_traits INTERFACE enum_traits.h)
-  target_include_directories(
-    enum_traits INTERFACE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}
-  )
+# include it
+add_custom_target(generate_enum_traits DEPENDS ${ENUM_TRAITS_FILE})
+add_library(enum_traits INTERFACE)
+target_sources(enum_traits INTERFACE ${ENUM_TRAITS_FILE})
+add_dependencies(enum_traits generate_enum_traits)
+target_include_directories(
+  enum_traits INTERFACE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}
+)
 endif()
 target_link_libraries(enum_traits INTERFACE mujoco absl::core_headers)
 
@@ -231,17 +238,21 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/function_traits.h)
   add_library(function_traits INTERFACE)
   target_sources(function_traits INTERFACE function_traits.h)
 else()
+  set(FUNCTION_TRAITS_FILE ${CMAKE_CURRENT_BINARY_DIR}/function_traits.h)
   add_custom_command(
-    OUTPUT function_traits.h
-    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${mujoco_SOURCE_DIR}/mujoco/python/mujoco ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/codegen/generate_function_traits.py > function_traits.h
+    OUTPUT ${FUNCTION_TRAITS_FILE}
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR} ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/codegen/generate_function_traits.py > ${FUNCTION_TRAITS_FILE}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/codegen/generate_function_traits.py
+    COMMENT "Generating function_traits.h"
   )
-  add_library(function_traits INTERFACE)
-  target_sources(function_traits INTERFACE function_traits.h)
-  target_include_directories(
-    function_traits INTERFACE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}
-  )
+add_custom_target(generate_function_traits DEPENDS ${FUNCTION_TRAITS_FILE})
+add_library(function_traits INTERFACE)
+target_sources(function_traits INTERFACE ${FUNCTION_TRAITS_FILE})
+add_dependencies(function_traits generate_function_traits)
+target_include_directories(
+  function_traits INTERFACE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}
+)
 endif()
 target_link_libraries(function_traits INTERFACE mujoco absl::core_headers)
 
@@ -428,7 +439,7 @@ target_link_libraries(
 if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/specs.cc.inc)
   add_custom_command(
     OUTPUT specs.cc.inc
-    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${mujoco_SOURCE_DIR}/mujoco/python ${Python3_EXECUTABLE}
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR} ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/codegen/generate_spec_bindings.py > specs.cc.inc
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/codegen/generate_spec_bindings.py
   )
