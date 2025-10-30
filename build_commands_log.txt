@@ -1,0 +1,31 @@
+## 1. Rebuild Filament
+cd /home/ai2admin/filament
+CC=/usr/bin/clang CXX=/usr/bin/clang++ CXXFLAGS=-stdlib=libc++ ./build.sh debug
+
+## 2. Rebuild MuJoCo
+cd /home/ai2admin/filament/mujoco
+./build_mujoco_with_filament.sh
+
+## 3. Copy to Python package
+cp /home/ai2admin/filament/mujoco/build/lib/libmujoco.so.3.3.8 \
+   /home/ai2admin/filament/mujoco/python/mujoco/libmujoco.so.3.3.8
+
+## 4. Verify your changes are in the binary
+strings /home/ai2admin/filament/mujoco/python/mujoco/libmujoco.so.3.3.8 | grep "YOUR STRING"
+
+
+## python
+
+cd /home/ai2admin/filament/mujoco/python/mujoco && rm -f libmujoco.so.3.3.8 && cd /home/ai2admin/filament/mujoco/python && export MUJOCO_PATH=/home/ai2admin/filament/mujoco && export MUJOCO_PLUGIN_PATH=/home/ai2admin/filament/mujoco/build/bin && python3 -m pip install --user -e . 2>&1 | tail -50
+
+rm -rf /home/ai2admin/filament/mujoco/python/mujoco/include /home/ai2admin/filament/mujoco/python/mujoco/plugin && cd /home/ai2admin/filament/mujoco/python && export MUJOCO_PATH=/home/ai2admin/filament/mujoco && export MUJOCO_PLUGIN_PATH=/home/ai2admin/filament/mujoco/build/bin && python3 -m pip install --user -e . 2>&1 | tail -60
+
+
+## compile mats
+
+cd /home/ai2admin/filament/mujoco/src/experimental/filament/assets && for f in *.mat; do echo "Compiling $f..." && /home/ai2admin/filament/out/cmake-debug/tools/matc/matc --api vulkan --api opengl --output /home/ai2admin/filament/mujoco/filament/assets/data/${f/.mat/.filamat} $f 2>&1 | grep -E "(error|Error|Unable|Compiling|Success)" || echo "Success"; done
+
+## run test 
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 python3 /home/ai2admin/filament/mujoco/test_filament_3d_asset.py
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 python3 /home/ai2admin/filament/mujoco/test_filament_python_simple.py
+
