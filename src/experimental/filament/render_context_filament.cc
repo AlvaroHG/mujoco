@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <vector>
 
 #include <mujoco/mjmodel.h>
 #include <mujoco/mjrender.h>
@@ -27,11 +28,54 @@
 #include <mujoco/mujoco.h>
 #include "experimental/filament/filament/filament_context.h"
 
+#ifdef __linux__
+#include <dlfcn.h>
+#include <link.h>
+#endif
+#ifdef __APPLE__
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
+#endif
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #if defined(TLS_FILAMENT_CONTEXT)
 static thread_local mujoco::FilamentContext* g_filament_context = nullptr;
 #else
 static mujoco::FilamentContext* g_filament_context = nullptr;
 #endif
+
+// To find the mujoco library and assets when running in python bindings/
+// find assets relative to the installed package.
+static std::filesystem::path GetLibraryDirectory() {
+#ifdef __linux__
+  Dl_info info;
+  if (dladdr(reinterpret_cast<void*>(GetLibraryDirectory), &info) != 0) {
+    std::filesystem::path lib_path(info.dli_fname);
+    return lib_path.parent_path();
+  }
+#elif defined(__APPLE__)
+  Dl_info info;
+  if (dladdr(reinterpret_cast<void*>(GetLibraryDirectory), &info) != 0) {
+    std::filesystem::path lib_path(info.dli_fname);
+    return lib_path.parent_path();
+  }
+#elif defined(_WIN32)
+  HMODULE hModule = nullptr;
+  if (GetModuleHandleExA(
+          GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+          reinterpret_cast<LPCSTR>(&GetLibraryDirectory), &hModule)) {
+    char path[MAX_PATH];
+    if (GetModuleFileNameA(hModule, path, MAX_PATH) != 0) {
+      std::filesystem::path lib_path(path);
+      return lib_path.parent_path();
+    }
+  }
+#endif
+  return std::filesystem::path();
+}
 
 // Default asset loader to use when calling mjr_makeContext. This is only
 // intended for basic backwards compatibility with the existing mjr_makeContext
@@ -40,28 +84,62 @@ static mujoco::FilamentContext* g_filament_context = nullptr;
 // Returns 0 on success and non-zero to indicate an error.
 static int DefaultLoadAsset(const char* asset_filename, void* user_data,
                              unsigned char** contents, uint64_t* out_size) {
-  std::filesystem::path full_path;
-  full_path.append("filament/assets/data");
-  full_path.append(asset_filename);
-
-  std::ifstream file(full_path, std::ios::binary);
-  if (!file) {
-    mju_error("File does not exist: %s", full_path.c_str());
-    return 1;
+  // Try multiple locations in order:
+  // 1. Environment variable MUJOCO_ASSETS_DIR
+  // 2. Current working directory + "filament/assets/data"
+  // 3. Library directory + "filament/assets/data" (for installed packages)
+  // 4. Library directory + "../filament/assets/data" (alternative layout)
+  
+  std::vector<std::filesystem::path> search_paths;
+  
+  // Check environment variable first
+  const char* assets_dir_env = std::getenv("MUJOCO_ASSETS_DIR");
+  if (assets_dir_env) {
+    search_paths.push_back(std::filesystem::path(assets_dir_env));
   }
-
-  file.seekg(0, std::ios::end);
-  *out_size = static_cast<uint64_t>(file.tellg());
-  if (*out_size == 0) {
-    mju_error("File is empty: %s", full_path.c_str());
-    return 1;
+  
+  // Current working directory
+  search_paths.push_back(std::filesystem::current_path() / "filament" / "assets" / "data");
+  
+  // Library directory (for installed packages)
+  std::filesystem::path lib_dir = GetLibraryDirectory();
+  if (!lib_dir.empty()) {
+    search_paths.push_back(lib_dir / "filament" / "assets" / "data");
+    search_paths.push_back(lib_dir.parent_path() / "filament" / "assets" / "data");
+    // Also check directly in the package directory (Python packages)
+    search_paths.push_back(lib_dir / "assets");
   }
-  file.seekg(0, std::ios::beg);
-
-  *contents = (unsigned char*)malloc(*out_size);
-  file.read((char*)*contents, *out_size);
-  file.close();
-  return 0;
+  
+  // Try each path
+  for (const auto& base_path : search_paths) {
+    std::filesystem::path full_path = base_path / asset_filename;
+    
+    std::ifstream file(full_path, std::ios::binary);
+    if (file) {
+      file.seekg(0, std::ios::end);
+      *out_size = static_cast<uint64_t>(file.tellg());
+      if (*out_size == 0) {
+        file.close();
+        continue;  // Try next path
+      }
+      file.seekg(0, std::ios::beg);
+      
+      *contents = (unsigned char*)malloc(*out_size);
+      if (*contents == nullptr) {
+        file.close();
+        mju_error("Failed to allocate memory for asset: %s", asset_filename);
+        return 1;
+      }
+      
+      file.read((char*)*contents, *out_size);
+      file.close();
+      return 0;
+    }
+  }
+  
+  // If we get here, none of the paths worked
+  mju_error("File does not exist in any search path: %s", asset_filename);
+  return 1;
 }
 
 static void CheckFilamentContext() {
