@@ -69,8 +69,10 @@ int mjr_getError() {
   return 0;
 }
 mjrRect mjr_maxViewport(const mjrContext* con) {
-  mju_error("mjr_maxViewport not implemented.");
-  return mjrRect{};
+  // mju_error("mjr_maxViewport not implemented.");
+  // return mjrRect{};
+  mjrRect res = {0, 0, con->offWidth, con->offHeight};
+  return res;
 }
 int mjr_findRect(int x, int y, int nrect, const mjrRect* rect) {
   mju_error("mjr_findRect not implemented.");

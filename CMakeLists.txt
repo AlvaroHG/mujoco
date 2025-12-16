@@ -179,6 +179,30 @@ target_link_libraries(
           tinyxml2
 )
 
+
+# Link Filament renderer and all its dependencies into libmujoco.so
+if(MUJOCO_USE_FILAMENT AND NOT EMSCRIPTEN)
+  # Ensure mujoco_filament is built first
+  add_dependencies(mujoco mujoco_filament)
+  # Use whole-archive with the library file path to avoid recompilation
+  target_link_libraries(mujoco PRIVATE
+    -Wl,--whole-archive
+    ${CMAKE_BINARY_DIR}/lib/libmujoco_filament.a
+    -Wl,--no-whole-archive
+    filament
+    backend
+    bluevk
+    bluegl
+    filaflat
+    filabridge
+    ktxreader
+    image
+    utils
+    smol-v
+    zstd
+  )
+endif()
+
 set_target_properties(
   mujoco PROPERTIES VERSION "${mujoco_VERSION}" PUBLIC_HEADER "${MUJOCO_HEADERS}"
 )

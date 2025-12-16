@@ -19,6 +19,13 @@ set(MUJOCO_FILAMENT_TARGET_NAME mujoco_filament)
 add_library(${MUJOCO_FILAMENT_TARGET_NAME} STATIC)
 target_compile_definitions(${MUJOCO_FILAMENT_TARGET_NAME} PRIVATE MJ_STATIC)
 
+# Ensure symbols are exported when this static library is linked into a shared library
+# This is needed because MJ_STATIC removes visibility attributes, but we still need
+# symbols to be exported from the final shared library
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(${MUJOCO_FILAMENT_TARGET_NAME} PRIVATE -fvisibility=default)
+endif()
+
 target_sources(${MUJOCO_FILAMENT_TARGET_NAME}
     PUBLIC
         stubs.cc

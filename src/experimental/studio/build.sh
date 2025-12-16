@@ -60,7 +60,7 @@ if [[ "$do_configure" == true ]]; then
         "-B build"
         "-DCMAKE_BUILD_TYPE=${build_type}"
         "-DUSE_STATIC_LIBCXX=OFF"
-        "-DBUILD_SHARED_LIB=OFF"
+        "-DBUILD_SHARED_LIB=ON"
         "-DMUJOCO_USE_FILAMENT=ON"
         "-DMUJOCO_USE_FILAMENT_VULKAN=OFF"
         "-DMUJOCO_BUILD_EXAMPLES=OFF"

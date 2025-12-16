@@ -38,4 +38,7 @@ fetchpackage(
     GIT_TAG       ${MUJOCO_DEP_VERSION_filament}
 )
 
+# Increase arena handle size which without throws error for most thor scenes
+# target_compile_definitions(filament PRIVATE FVK_HANDLE_ARENA_SIZE_IN_MB=256)
+
 set(BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS_OLD})
