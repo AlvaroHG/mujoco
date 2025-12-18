@@ -83,6 +83,19 @@ then run the following:
 emcmake cmake -B build && cmake --build build
 ```
 
+To build in Debug mode with full debug symbols and source maps for better browser debugging:
+
+```sh
+emcmake cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build
+```
+
+Debug builds include:
+- No optimization (`-O0`) for easier debugging
+- Full debug symbols (`-g4`)
+- Source maps for stepping through C++ code in browser DevTools
+- Additional safety checks (SAFE_HEAP, STACK_OVERFLOW_CHECK)
+- Better stack traces with demangled C++ names
+
 This command will generate the following folders under the project root:
 
 - `build`: contains MuJoCo compiled using Emscripten.
@@ -120,6 +133,12 @@ using this command:
 
 ```sh
 PYTHONPATH=python/mujoco python3 -m wasm.codegen.update
+```
+
+If you're using a conda environment (e.g., `emsdk`), use the Python from that environment:
+
+```sh
+PYTHONPATH=python/mujoco /path/to/conda/envs/emsdk/bin/python -m wasm.codegen.update
 ```
 
 The codegen scripts use MuJoCo’s Python introspect library to generate the

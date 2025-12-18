@@ -21,6 +21,7 @@
     "@types/jasmine": "^5.1.8",
     "@types/node": "^24.1.0",
     "jasmine": "^5.9.0",
+    "js-untar": "^1.0.2",
     "three": "^0.178.0",
     "ts-node": "^10.9.2",
     "typescript": "5.8.2",

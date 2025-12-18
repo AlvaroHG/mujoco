@@ -36,6 +36,14 @@
 #include "engine/engine_util_errmem.h"
 #include "wasm/unpack.h"
 
+// Forward declaration of mjCError to avoid including user_objects.h
+// which has dependencies (tiny_obj_loader.h) not available in WASM build
+class mjCError {
+ public:
+  char message[500];
+  bool warning;
+};
+
 namespace mujoco::wasm {
 
 using emscripten::enum_;
@@ -388,12 +396,57 @@ void MjSpec::set(mjSpec *ptr) { ptr_ = ptr; }
 
 std::unique_ptr<MjModel> mj_loadXML_wrapper(std::string filename) {
   char error[1000];
-  mjModel *model = mj_loadXML(filename.c_str(), nullptr, error, sizeof(error));
-  if (!model) {
-    printf("Loading error: %s\n", error);
+  error[0] = '\0';  // Initialize error buffer
+  
+  // Wrap in try-catch to handle exceptions that escape mj_loadXML
+  try {
+    mjModel *model = mj_loadXML(filename.c_str(), nullptr, error, sizeof(error));
+    if (!model) {
+      // If error buffer is empty, try to get error from the global spec
+      if (error[0] == '\0') {
+        // Try to get error from the last parsed spec if available
+        // This is a fallback if the exception escaped before error was set
+        const char* spec_error = nullptr;
+        // Note: We can't easily access the global spec here, so we'll use a generic message
+        strncpy(error, "Model compilation failed (check console for details)", sizeof(error) - 1);
+        error[sizeof(error) - 1] = '\0';
+      }
+      
+      printf("Loading error: %s\n", error);
+      
+      // Throw a JavaScript error with the error message
+      std::string full_error = std::string("MuJoCo loading error: ") + error;
+      val(val::global("Error").new_(val(full_error)))
+          .throw_();
+      return nullptr;
+    }
+    
+    return std::unique_ptr<MjModel>(new MjModel(model));
+  } catch (const mjCError& e) {
+    // Catch mjCError exceptions that escape
+    std::string error_msg = std::string("MuJoCo error: ") + std::string(e.message);
+    printf("mjCError caught: %s\n", error_msg.c_str());
+    val(val::global("Error").new_(val(error_msg))).throw_();
+    return nullptr;
+  } catch (const std::bad_alloc& e) {
+    // Special handling for memory allocation failures
+    std::string error_msg = std::string("Memory allocation failed: ") + e.what();
+    printf("bad_alloc caught: %s\n", error_msg.c_str());
+    val(val::global("Error").new_(val(error_msg))).throw_();
+    return nullptr;
+  } catch (const std::exception& e) {
+    // Catch any other C++ exceptions that escape
+    std::string error_msg = std::string("C++ exception during model loading: ") + e.what();
+    printf("Exception caught: %s\n", error_msg.c_str());
+    val(val::global("Error").new_(val(error_msg))).throw_();
+    return nullptr;
+  } catch (...) {
+    // Catch any other exceptions
+    std::string error_msg = "Unknown exception during model loading";
+    printf("Unknown exception caught\n");
+    val(val::global("Error").new_(val(error_msg))).throw_();
     return nullptr;
   }
-  return std::unique_ptr<MjModel>(new MjModel(model));
 }
 
 std::unique_ptr<MjSpec> parseXMLString_wrapper(const std::string &xml) {

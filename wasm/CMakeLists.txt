@@ -14,7 +14,19 @@
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/wasm/dist")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -O3 -fexceptions")
+# Set default build type to Release if not specified
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+# Set optimization and debug flags based on build type
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -O0 -g3 -fexceptions")
+  message(STATUS "Building in Debug mode (no optimization, full debug symbols)")
+else()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -O3 -fexceptions")
+  message(STATUS "Building in Release mode (optimized)")
+endif()
 
 set(CMAKE_INSTALL_PREFIX ${PROJECT_SOURCE_DIR}/wasm)
 
@@ -41,16 +53,34 @@ set(EMCC_LINKER_FLAGS
     "--bind"
     "-s ASSERTIONS=1"
     "-s ALLOW_MEMORY_GROWTH=1"
+    "-s INITIAL_MEMORY=3GB"
+    "-s MAXIMUM_MEMORY=4GB"
+    "-s STACK_SIZE=2MB"
     "-s EXPORT_ES6=1"
     "-s MODULARIZE=1"
     "-s FORCE_FILESYSTEM=1"
     "-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap','FS','MEMFS']"
     "-s EXPORT_NAME=loadMujoco"
     "-s DISABLE_EXCEPTION_CATCHING=0"
-    "-gsource-map"
-    "-g"
     "--emit-tsd mujoco_wasm.d.ts"
 )
+
+# Add debug-specific flags
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  list(APPEND EMCC_LINKER_FLAGS
+    "-gsource-map"           # Generate source maps (replaces -g4)
+    "-g"                     # Debug symbols
+    "-s SAFE_HEAP=1"         # Additional heap safety checks
+    "-s STACK_OVERFLOW_CHECK=2"  # Stack overflow detection
+    "-s ASSERTIONS=2"        # More aggressive assertions
+  )
+  message(STATUS "Debug build: Full debug symbols, source maps, and safety checks enabled")
+else()
+  list(APPEND EMCC_LINKER_FLAGS
+    "-g"                     # Basic debug info for release
+    "-gsource-map"           # Source maps for release too (helpful for debugging)
+  )
+endif()
 string (REPLACE ";" " " EMCC_LINKER_FLAGS_STR "${EMCC_LINKER_FLAGS}")
 
 add_executable(mujoco_wasm ${MUJOCO_WASM_FILES})
