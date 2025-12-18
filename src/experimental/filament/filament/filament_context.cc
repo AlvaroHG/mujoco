@@ -89,7 +89,7 @@ FilamentContext::FilamentContext(const mjrFilamentConfig* config,
   filament::Renderer::ClearOptions opts;
   opts.clear = true;
   opts.discard = true;
-  opts.clearColor = {0.1, 0.1, 0.1, 1};
+  opts.clearColor = {0, 0, 0, 1};
   renderer_->setClearOptions(opts);
 
   // Copy parameters from model to context.
@@ -145,7 +145,7 @@ void FilamentContext::Render(const mjrRect& viewport, const mjvScene* scene,
 
   // Draw the GUI. We do this after processing the scene in case there are any
   // label elements in the scene.
-  if (gui_view_) {
+  if (gui_view_ && !render_to_texture_) {
     DrawGui(scene_view_.get());
 
     // Prepare the filament Renderable that contains the GUI draw commands. We
@@ -161,8 +161,10 @@ void FilamentContext::Render(const mjrRect& viewport, const mjvScene* scene,
   if (!render_to_texture_) {
     filament::View* view = scene_view_->PrepareRenderView(last_render_mode_);
 
+    #ifndef __EMSCRIPTEN__
     // Wait until previous frame is completed before requesting a new frame.
     engine_->flushAndWait();
+    #endif
 
     if (renderer_->beginFrame(swap_chain_)) {
       renderer_->render(view);
@@ -312,6 +314,15 @@ void FilamentContext::UploadTexture(const mjModel* model, int id) {
 
 void FilamentContext::UploadHeightField(const mjModel* model, int id) {
   object_manager_->UploadHeightField(model, id);
+}
+
+uintptr_t FilamentContext::UploadGuiImage(uintptr_t tex_id,
+                                          const uint8_t* pixels, int width,
+                                          int height, int bpp) {
+  if (gui_view_) {
+    return gui_view_->UploadImage(tex_id, pixels, width, height, bpp);
+  }
+  return 0;
 }
 
 double FilamentContext::GetFrameRate() const {

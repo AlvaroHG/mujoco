@@ -136,7 +136,7 @@ class ModelIOTest(parameterized.TestCase):
 
   @parameterized.product(
       xml=(_MULTIPLE_CONVEX_OBJECTS, _MULTIPLE_CONSTRAINTS),
-      impl=('jax', 'c', 'warp'),
+      impl=('jax', 'c', 'warp', 'cpp'),
   )
   @mock.patch.dict(os.environ, {'MJX_GPU_DEFAULT_WARP': 'true'})
   def test_put_model(self, xml, impl):
@@ -181,6 +181,9 @@ class ModelIOTest(parameterized.TestCase):
       self.assertTrue(hasattr(mx.opt._impl, 'ls_parallel'))
       # Fields private to Warp backend impl are populated.
       self.assertTrue(hasattr(mx._impl, 'nxn_geom_pair'))
+    elif impl == 'cpp':
+      self.assertTrue(hasattr(mx._impl, 'pointer_lo'))
+      self.assertTrue(hasattr(mx._impl, 'pointer_hi'))
 
     np.testing.assert_allclose(mx.body_parentid, m.body_parentid)
     np.testing.assert_allclose(mx.geom_type, m.geom_type)
@@ -402,14 +405,18 @@ class DataIOTest(parameterized.TestCase):
     self.assertEqual(d.geom_xpos.shape, (6, 3))
     self.assertEqual(d.geom_xmat.shape, (6, 3, 3))
     self.assertEqual(d.subtree_com.shape, (nbody, 3))
-    self.assertEqual(d._impl.cdof.shape, (nv, 6))
+    self.assertEqual(d.cdof.shape, (nv, 6))
     self.assertEqual(d._impl.cinert.shape, (nbody, 10))
     self.assertEqual(d._impl.crb.shape, (nbody, 10))
-    self.assertEqual(d._impl.actuator_length.shape, (1,))
+    self.assertEqual(d.actuator_length.shape, (1,))
     if impl == 'jax':
       self.assertEqual(d._impl.actuator_moment.shape, (1, nv))
     elif impl == 'c':
       self.assertEqual(d._impl.actuator_moment.shape, (m.nJmom,))
+    elif impl == 'cpp':
+      self.assertTrue(hasattr(d._impl, 'pointer_lo'))
+      self.assertTrue(hasattr(d._impl, 'pointer_hi'))
+      return  # cpp does not populate other fields in _impl
     self.assertEqual(d._impl.contact.dist.shape, (ncon,))
     self.assertEqual(d._impl.contact.pos.shape, (ncon, 3))
     self.assertEqual(d._impl.contact.frame.shape, (ncon, 3, 3))
@@ -422,7 +429,7 @@ class DataIOTest(parameterized.TestCase):
     self.assertEqual(d._impl.efc_D.shape, (nefc,))
     self.assertEqual(d._impl.actuator_velocity.shape, (1,))
     self.assertEqual(d.cvel.shape, (nbody, 6))
-    self.assertEqual(d._impl.cdof_dot.shape, (nv, 6))
+    self.assertEqual(d.cdof_dot.shape, (nv, 6))
     self.assertEqual(d.qfrc_bias.shape, (nv,))
     self.assertEqual(d.qfrc_passive.shape, (nv,))
     self.assertEqual(d._impl.efc_aref.shape, (nefc,))
@@ -477,7 +484,7 @@ class DataIOTest(parameterized.TestCase):
     np.testing.assert_allclose(dx.qpos, d.qpos)
     np.testing.assert_allclose(dx.xpos, d.xpos)
     np.testing.assert_allclose(dx.cvel, d.cvel)
-    np.testing.assert_allclose(dx._impl.cdof_dot, d.cdof_dot)
+    np.testing.assert_allclose(dx.cdof_dot, d.cdof_dot)
 
     # check that there are no weak types
     self.assertFalse(
@@ -497,6 +504,10 @@ class DataIOTest(parameterized.TestCase):
       np.testing.assert_allclose(dx._impl.qM, d.qM)
       np.testing.assert_allclose(dx._impl.qLD, d.qLD)
       np.testing.assert_allclose(dx._impl.qLDiagInv, d.qLDiagInv)
+    elif impl == 'cpp':
+      self.assertTrue(hasattr(dx._impl, 'pointer_lo'))
+      self.assertTrue(hasattr(dx._impl, 'pointer_hi'))
+      return  # cpp does not populate other fields in _impl
 
     # 4 contacts, 2 for each capsule against the plane
     self.assertEqual(dx._impl.contact.dist.shape, (4,))
@@ -816,6 +827,39 @@ class DataIOTest(parameterized.TestCase):
       self.assertEqual(dx._impl.contact__dist.shape, (dx._impl.naconmax,))
       self.assertEqual(dx[0]._impl.contact__dist.shape, (dx._impl.naconmax,))
 
+  def test_put_data_cpp(self):
+    m = mujoco.MjModel.from_xml_string("""
+      <mujoco>
+        <worldbody>
+          <body name="body1" pos="0 0 1">
+            <joint type="free"/>
+            <geom type="sphere" size="0.1"/>
+          </body>
+        </worldbody>
+      </mujoco>
+    """)
+    d = mujoco.MjData(m)
+    d.qpos[0] = 1.0
+    unused_mjx_data = mjx_io.put_data(m, d, impl='cpp')
+
+    def put_data(dummy_arg_for_batching):
+      dx = mjx_io.put_data(
+          m, d, impl='cpp', dummy_arg_for_batching=dummy_arg_for_batching
+      )
+      return dx
+
+    vmjx_data = jax.vmap(put_data, in_axes=0, out_axes=0)(
+        jp.zeros(2, dtype=jp.uint32)
+    )
+
+    self.assertEqual(vmjx_data.qpos.shape, (2, m.nq))
+    self.assertEqual(len(vmjx_data._impl._data), 2)
+    # check that the data pointers in fact point to different datas
+    self.assertNotEqual(
+        vmjx_data._impl._data[0]._address,
+        vmjx_data._impl._data[1]._address,
+    )
+
 
 # Test cases for `_resolve_impl_and_device` where the device is
 # specified by the user and the device is available.
@@ -1116,6 +1160,39 @@ class StateIOTest(parameterized.TestCase):
     m = mujoco.MjModel.from_xml_string(_MULTIPLE_CONSTRAINTS)
     mx = mjx.put_model(m)
     self.assertEqual(mjx.state_size(mx, spec), mujoco.mj_stateSize(m, spec))
+
+  def test_put_data_cpp(self):
+    m = mujoco.MjModel.from_xml_string("""
+      <mujoco>
+        <worldbody>
+          <body name="body1" pos="0 0 1">
+            <joint type="free"/>
+            <geom type="sphere" size="0.1"/>
+          </body>
+        </worldbody>
+      </mujoco>
+    """)
+    d = mujoco.MjData(m)
+    d.qpos[0] = 1.0
+    unused_mjx_data = mjx_io.put_data(m, d, impl='cpp')
+
+    def put_data(dummy_arg_for_batching):
+      dx = mjx_io.put_data(
+          m, d, impl='cpp', dummy_arg_for_batching=dummy_arg_for_batching
+      )
+      return dx
+
+    vmjx_data = jax.vmap(put_data, in_axes=0, out_axes=0)(
+        jp.zeros(2, dtype=jp.uint32)
+    )
+
+    self.assertEqual(vmjx_data.qpos.shape, (2, m.nq))
+    self.assertEqual(len(vmjx_data._impl._data), 2)
+    # check that the data pointers in fact point to different datas
+    self.assertNotEqual(
+        vmjx_data._impl._data[0]._address,
+        vmjx_data._impl._data[1]._address,
+    )
 
   def test_get_set_state(self):
     m = mujoco.MjModel.from_xml_string(_MULTIPLE_CONSTRAINTS)

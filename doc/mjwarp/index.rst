@@ -28,6 +28,15 @@ MJWarp is developed and maintained as a joint effort by `NVIDIA <https://nvidia.
    - MJWarp is mostly feature complete but requires performance optimization, documentation, and testing.
    - The intended audience during Beta are physics engine enthusiasts and learning framework integrators.
 
+.. _MJW_tutorial:
+
+Tutorial notebook
+=================
+
+The MJWarp basics are covered in a
+`tutorial
+notebook <https://colab.research.google.com/github/google-deepmind/mujoco_warp/blob/main/notebooks/tutorial.ipynb>`__.
+
 .. _MJW_install:
 
 Installation
@@ -183,8 +192,6 @@ The following features are **not supported** in MJWarp:
 
    * - Category
      - Feature
-   * - :ref:`Equality <mjtEq>`
-     - ``FLEX``
    * - :ref:`Integrator <mjtIntegrator>`
      - ``IMPLICIT``, ``IMPLICITFAST`` not supported with fluid drag
    * - :ref:`Solver <mjtSolver>`
@@ -194,7 +201,7 @@ The following features are **not supported** in MJWarp:
    * - :ref:`Sensors <mjtSensor>`
      - ``GEOMDIST``, ``GEOMNORMAL``, ``GEOMFROMTO``
    * - Flex
-     - ``VERTCOLLIDE=false``, ``INTERNAL=true``, ``nflex > 1``
+     - ``VERTCOLLIDE=false``, ``INTERNAL=true``
    * - Jacobian format
      - ``SPARSE``
    * - Option
@@ -418,6 +425,15 @@ for details and
 `mjlab distributed training <https://github.com/mujocolab/mjlab/tree/main/docs/api/distributed_training.md>`__ for a
 reinforcement learning example.
 
+**Is MJWarp on GPU deterministic?**
+
+No. There may be ordering or *small* numerical differences between results computed by different executions of the same
+code. This is characteristic of non-deterministic atomic operations on GPU. Set device to CPU with
+``wp.set_device("cpu")`` for deterministic results.
+
+Developments for deterministic results on GPU are tracked in this
+`GitHub issue <https://github.com/google-deepmind/mujoco_warp/issues/562>`__.
+
 **How are orientations represented?**
 
 Orientations are represented as unit quaternions and follow :ref:`MuJoCo's conventions<siLayout>`:
@@ -431,3 +447,50 @@ Orientations are represented as unit quaternions and follow :ref:`MuJoCo's conve
   operations and instead implements quaternion routines that follow MuJoCo's conventions. Please see
   `math.py <https://github.com/google-deepmind/mujoco_warp/blob/main/mujoco_warp/_src/math.py>`__ for the
   implementations.
+
+**Does MJWarp have a named access API / bind?**
+
+No. Updates for this feature are tracked in this
+`GitHub issue <https://github.com/google-deepmind/mujoco_warp/issues/884>`__.
+
+**Why are contacts reported when there are no collisions?**
+
+1 contact will be reported for each unique geom pair that contributes to any collision sensor, even if this geom pair is
+not in collision. Unlike MuJoCo or MJX where :ref:`collision sensors<collision-sensors>` make separate calls to
+collision routines while computing sensor data, MJWarp computes and stores the data for these sensors in contacts while
+running its main collision pipeline.
+
+:ref:`Contact sensors<sensor-contact>` will report the correct information for contacts affecting the physics.
+
+**Why are Jacobians always dense?**
+
+Sparse Jacobians are not currently implemented and ``Data`` fields: ``ten_J``, ``actuator_moment``, ``flexedge_J``, and
+``efc.J`` are always represented as dense matrices. Support for sparse Jacobians is tracked in GitHub issue
+`#88 <https://github.com/google-deepmind/mujoco_warp/issues/88>`__.
+
+Compilation
+-----------
+
+**How can compilation time be improved?**
+
+Limit the number of unique colliders that require the general convex collision pipeline. These colliders are listed as
+``_CONVEX_COLLISION_PAIRS`` in
+`collision_convex.py <https://github.com/google-deepmind/mujoco_warp/blob/main/mujoco_warp/_src/collision_convex.py>`__.
+Improvements to the compilation time for the pipeline are tracked in this
+`GitHub issue <https://github.com/google-deepmind/mujoco_warp/issues/813>`__.
+
+**Why are the physics not working as expected after upgrading MJWarp?**
+
+The Warp cache may be incompatible with the current code and should be cleared as part of the debugging process. This
+can be accomplished by deleting the directory ``~/.cache/warp`` or via Python
+
+.. code-block:: python
+
+   import warp as wp
+   wp.clear_kernel_cache()
+
+**Is it possible to compile MJWarp ahead of time instead of at runtime?**
+
+Yes. Please see Warp's
+`Ahead-of-Time Compilation Workflows <https://nvidia.github.io/warp/codegen.html#ahead-of-time-compilation-workflows>`__
+documentation for details.

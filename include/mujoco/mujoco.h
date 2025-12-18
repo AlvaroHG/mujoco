@@ -16,7 +16,7 @@
 #define MUJOCO_MUJOCO_H_
 
 // header version; should match the library version as returned by mj_version()
-#define mjVERSION_HEADER 340
+#define mjVERSION_HEADER 341
 
 // needed to define size_t, fabs and log10
 #include <stdlib.h>
@@ -211,6 +211,9 @@ MJAPI void mj_saveModel(const mjModel* m, const char* filename, void* buffer, in
 // If vfs is not NULL, look up file in vfs before reading from disk.
 // Nullable: vfs
 MJAPI mjModel* mj_loadModel(const char* filename, const mjVFS* vfs);
+
+// Load model from memory buffer.
+MJAPI mjModel* mj_loadModelBuffer(const void* buffer, int buffer_sz);
 
 // Free memory allocation in model.
 MJAPI void mj_deleteModel(mjModel* m);
@@ -468,20 +471,20 @@ MJAPI void mj_constraintUpdate(const mjModel* m, mjData* d, const mjtNum* jar,
 //---------------------------------- Support -------------------------------------------------------
 
 // Return size of state signature.
-MJAPI int mj_stateSize(const mjModel* m, unsigned int sig);
+MJAPI int mj_stateSize(const mjModel* m, int sig);
 
 // Get state.
-MJAPI void mj_getState(const mjModel* m, const mjData* d, mjtNum* state, unsigned int sig);
+MJAPI void mj_getState(const mjModel* m, const mjData* d, mjtNum* state, int sig);
 
 // Extract a subset of components from a state previously obtained via mj_getState.
-MJAPI void mj_extractState(const mjModel* m, const mjtNum* src, unsigned int srcsig,
-                           mjtNum* dst, unsigned int dstsig);
+MJAPI void mj_extractState(const mjModel* m, const mjtNum* src, int srcsig,
+                           mjtNum* dst, int dstsig);
 
 // Set state.
-MJAPI void mj_setState(const mjModel* m, mjData* d, const mjtNum* state, unsigned int sig);
+MJAPI void mj_setState(const mjModel* m, mjData* d, const mjtNum* state, int sig);
 
 // Copy state from src to dst.
-MJAPI void mj_copyState(const mjModel* m, const mjData* src, mjData* dst, unsigned int sig);
+MJAPI void mj_copyState(const mjModel* m, const mjData* src, mjData* dst, int sig);
 
 // Copy current state to the k-th model keyframe.
 MJAPI void mj_setKeyframe(mjModel* m, const mjData* d, int k);

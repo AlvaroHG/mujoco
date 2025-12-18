@@ -289,7 +289,10 @@ void SceneView::PrepareLights() {
         params.spot_cone_angle = model->light_cutoff[i];
       }
       auto light_obj = std::make_unique<Light>(object_mgr_, params);
+#ifndef __EMSCRIPTEN__
+      // TODO(b/458045799): Re-enable when lights work on glinux and chromebook.
       light_obj->AddToScene(scene_);
+#endif
       lights_.emplace_back(std::move(light_obj));
     }
   }
@@ -324,8 +327,10 @@ void SceneView::PrepareLights() {
     SetFallbackEnvironmentLight(kFallbackEnvironmentLightIntensityCandela);
     const float intensity = kTotalSceneLightIntensityCandela / lights_.size();
     for (auto& light : lights_) {
-      light->SetIntensity(light->IsHeadlight() ? kHeadlightIntensityCandela
-                                               : intensity);
+      if (light) {
+        light->SetIntensity(light->IsHeadlight() ? kHeadlightIntensityCandela
+                                                : intensity);
+      }
     }
   }
 }
@@ -378,9 +383,11 @@ void SceneView::UpdateScene(const mjrContext* context, const mjvScene* scene) {
       continue;
     } else if (scene_light.id < lights_.size() - 1) {
       std::unique_ptr<Light>& light = lights_[scene_light.id];
-      light->SetColor(ReadFloat3(scene_light.diffuse));
-      light->SetTransform(ReadFloat3(scene_light.pos),
-                          ReadFloat3(scene_light.dir));
+      if (light) {
+        light->SetColor(ReadFloat3(scene_light.diffuse));
+        light->SetTransform(ReadFloat3(scene_light.pos),
+                            ReadFloat3(scene_light.dir));
+      }
     } else {
       mju_error("Unexpected light id: %d", scene_light.id);
     }

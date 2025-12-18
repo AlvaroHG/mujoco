@@ -64,7 +64,6 @@ _SKIPPED_PLUGIN_FUNCTIONS: tuple[str, ...] = (
 # Functions that are bound as class methods
 _SKIPPED_CLASS_METHODS: tuple[str, ...] = (
     # go/keep-sorted start
-    "mj_compile",
     "mj_copyData",
     "mj_copyModel",
     "mj_copySpec",
@@ -139,6 +138,7 @@ _SKIPPED_MEMORY_FUNCTIONS: tuple[str, ...] = (
     "mj_freeLastXML",
     "mj_freeStack",
     "mj_loadModel",
+    "mj_loadModelBuffer",
     "mj_markStack",
     "mj_saveModel",
     "mj_stackAllocByte",
@@ -191,6 +191,7 @@ _SKIPPED_UTILITY_FUNCTIONS: tuple[str, ...] = (
 # These functions are not bound automatically but are written by hand instead.
 MANUAL_WRAPPER_FUNCTIONS: tuple[str, ...] = (
     # go/keep-sorted start
+    "mj_compile",
     "mj_saveLastXML",
     "mj_setLengthRange",
     "mju_error",

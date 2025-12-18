@@ -82,7 +82,7 @@ using ::testing::DoubleNear;
 using ::testing::ElementsAre;
 using ::testing::NotNull;
 using ::testing::Pointwise;
-using RayTest = MujocoTest;
+using RayTest = PluginTest;
 
 TEST_F(RayTest, NoExclusions) {
   char error[1024];
@@ -475,11 +475,13 @@ static const char* const kEllipsoidModel = "engine/testdata/ray/ellipsoid.xml";
 static const char* const kCylinderModel = "engine/testdata/ray/cylinder.xml";
 static const char* const kBoxModel = "engine/testdata/ray/box.xml";
 static const char* const kMeshModel = "engine/testdata/ray/mesh.xml";
+static const char* const kSdfModel = "engine/testdata/ray/sdf.xml";
+static const char* const kHfieldModel = "engine/testdata/ray/hfield.xml";
 
 TEST_F(RayTest, GeomNormal) {
   for (const char* path :
        {kPlaneModel, kSphereModel, kCapsuleModel, kEllipsoidModel,
-        kCylinderModel, kBoxModel, kMeshModel}) {
+        kCylinderModel, kBoxModel, kMeshModel, kSdfModel, kHfieldModel}) {
     const std::string xml_path = GetTestDataFilePath(path);
     char error[1024];
     mjModel* m = mj_loadXML(xml_path.c_str(), 0, error, sizeof(error));
@@ -508,32 +510,22 @@ TEST_F(RayTest, GeomNormal) {
         continue;
       }
 
-      // geom info
-      const mjtNum* pos = d->geom_xpos;
-      const mjtNum* mat = d->geom_xmat;
-      const mjtNum* size = m->geom_size;
-      int type = m->geom_type[0];
-
       // site info
       const mjtNum* pnt = d->site_xpos;
       const mjtNum vec[3] = {d->site_xmat[2], d->site_xmat[5], d->site_xmat[8]};
 
       // compute ray length and normal
       mjtNum r, normal[3];
-      switch (type) {
-        case mjGEOM_MESH:
-          r = mj_rayMeshNormal(m, d, 0, pnt, vec, normal);
-          break;
-        default:
-          r = mju_rayGeomNormal(pos, mat, size, pnt, vec, type, normal);
-      }
+      int geomid;
+      r = mj_rayNormal(m, d, pnt, vec, NULL, 1, -1, &geomid, normal);
 
       // compare with sensor
       EXPECT_EQ(r, d->sensordata[0]) << path << ", time " << d->time;
 
       // if no intersection, skip
       if (r < 0) {
-        EXPECT_THAT(normal, ElementsAre(0, 0, 0));
+        EXPECT_THAT(normal, ElementsAre(0, 0, 0))
+            << path << ", time " << d->time;
         continue;
       }
 
@@ -550,13 +542,7 @@ TEST_F(RayTest, GeomNormal) {
                            d->site_xmat[6 + i]};
         mjtNum dr, dpnt[3];
         mju_addScl3(dpnt, pnt, nudge, eps);
-        switch (type) {
-          case mjGEOM_MESH:
-            dr = mj_rayMeshNormal(m, d, 0, dpnt, vec, nullptr);
-            break;
-          default:
-            dr = mju_rayGeomNormal(pos, mat, size, dpnt, vec, type, nullptr);
-        }
+        dr = mj_rayNormal(m, d, dpnt, vec, NULL, 1, -1, nullptr, nullptr);
         mju_addScl3(ds[i], dpnt, vec, dr);
       }
 

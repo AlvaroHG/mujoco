@@ -2,9 +2,26 @@
 Changelog
 =========
 
-
 Upcoming version (not yet released)
 -----------------------------------
+
+General
+^^^^^^^
+- Non-breaking ABI changes:
+
+  - The type of the ``sig`` (signature) argument of :ref:`mj_stateSize` and related functions has been changed from
+    ``unsigned int`` to ``int``. Before this change, invalid negative arguments passed to this function would result in
+    a silent implicit cast, now negativity will trigger an error.
+
+MJX
+^^^
+- Added ``actuator_length``, ``cdof`` and ``cdof_dof`` fields to ``mjx.Data``.
+
+Bug fixes
+^^^^^^^^^
+
+Version 3.4.0 (December 5, 2025)
+--------------------------------
 
 General
 ^^^^^^^
@@ -13,20 +30,20 @@ General
    :align: right
    :width: 35%
 
-- Introduced a major new feature: :ref:`sleeping islands<Sleeping>`. Preliminary release for early testing, see
-  documentation for details.
-- Added "quadratic" option to :ref:`flexcomp/dof<body-flexcomp-dof>`. This type of fast :ref:`deformable<CDeformable>`
-  flex object is similar to the "trilinear" option, but it includes curved deformations.
-- Raise an error if there are name collisions also during parsing.
-- Increase Windows stack size to 16MB to enable models with deep nested body hierarchies.
-- Added a new pipeline component function :ref:`mj_fwdKinematics` that combines all kinematics-like sub-components.
-  Relatedly, added a clarifying table at the top of the :ref:`Simulation Pipeline<Pipeline>` chapter.
-- Added a new :ref:`mj_extractState` function that allows a subset of a state that was previously returned by
-  :ref:`mj_getState` to be extracted without having to be written back into ``mjData`` first.
-- Added a new :ref:`mj_copyState` function that copies state components from one ``mjData`` to another.
-- Tendon paths can now be queried from Python via ``MjsTendon.path``, the returned object
-  is iterable and indexing it will give the ``MjsWrap`` at the given index in the path.
-- ``MjsWrap`` now exposes:
+1. Introduced a major new feature: :ref:`sleeping islands<Sleeping>`. Preliminary release for early testing, see
+   documentation for details.
+2. Added "quadratic" option to :ref:`flexcomp/dof<body-flexcomp-dof>`. This type of fast :ref:`deformable<CDeformable>`
+   flex object is similar to the "trilinear" option, but it includes curved deformations.
+3. Raise an error if there are name collisions also during parsing.
+4. Increase Windows stack size to 16MB to enable models with deep nested body hierarchies.
+5. Added a new pipeline component function :ref:`mj_fwdKinematics` that combines all kinematics-like sub-components.
+   Relatedly, added a clarifying table at the top of the :ref:`Simulation Pipeline<Pipeline>` chapter.
+6. Added a new :ref:`mj_extractState` function that allows a subset of a state that was previously returned by
+   :ref:`mj_getState` to be extracted without having to be written back into ``mjData`` first.
+7. Added a new :ref:`mj_copyState` function that copies state components from one ``mjData`` to another.
+8. Tendon paths can now be queried from Python via ``MjsTendon.path``, the returned object
+   is iterable and indexing it will give the ``MjsWrap`` at the given index in the path.
+9. ``MjsWrap`` now exposes:
 
    - ``type -> mujoco.mjtWrap``
    - ``target -> MjsSite|MjsJoint|MjsGeom|None``
@@ -34,15 +51,15 @@ General
    - ``coef -> real``
    - ``divisor -> real``
 
-- Non-breaking ABI changes:
+10. Non-breaking ABI changes:
 
-  - :ref:`mjtSize` is now defined as ``int64_t`` rather than ``uint64_t`` to avoid future type-promotion bugs.
-  - :ref:`mj_sizeModel` now returns an :ref:`mjtSize` rather than an ``int``.
+    - :ref:`mjtSize` is now defined as ``int64_t`` rather than ``uint64_t`` to avoid future type-promotion bugs.
+    - :ref:`mj_sizeModel` now returns an :ref:`mjtSize` rather than an ``int``.
 
 MJX
 ^^^
 
-- ``warp-lang`` optional dependency is updated to 1.10.0. ``pmap`` now works with MuJoCo Warp from MJX.
+11. ``warp-lang`` optional dependency is updated to 1.10.0. ``pmap`` now works with MuJoCo Warp from MJX.
 
 .. admonition:: Breaking ABI changes
    :class: attention
@@ -55,7 +72,7 @@ MJX
 Bug fixes
 ^^^^^^^^^
 
-- Fixed a bug in the box-box distance computation. Reported by :github:user:`nvtw`.
+12. Fixed a bug in the box-box distance computation. Reported by :github:user:`nvtw`.
 
 Version 3.3.7 (October 13, 2025)
 --------------------------------

@@ -48,8 +48,17 @@ class App {
   App(int width, int height, std::string ini_path,
       const platform::LoadAssetFn& load_asset_fn);
 
+  enum ContentType {
+    kFilepath,  // Path to a model file.
+    kModelXml,  // XML model string.
+    kModelMjb,  // Binary model payload.
+  };
+
   // Loads a model into the simulation.
-  void LoadModel(std::string model_file);
+  //
+  // Note: Do not call this function from within Update() (i.e. while drawing
+  // the UX). Call RequestModelLoad() instead.
+  void LoadModel(std::string data, ContentType type);
 
   // Processes window events and advances the state of the simulation.
   bool Update();
@@ -81,10 +90,11 @@ class App {
   // UI state that is transient and only needed while the application runs
   struct UiTempState {
     bool should_exit = false;
+    bool first_frame = true;
 
     // Windows.
     bool help = false;
-    bool info = false;
+    bool stats = false;
     bool chart_cpu_time = false;
     bool chart_dimensions = false;
     bool chart_solver = false;
@@ -105,6 +115,10 @@ class App {
     float expected_label_width = 0;
     std::vector<std::string> camera_names;
     std::vector<std::string> speed_names;
+
+    // Spec Properties.
+    mjsElement* element = nullptr;
+    int element_id = -1;
 
     // State.
     int state_sig = 0;
@@ -128,6 +142,7 @@ class App {
   void ClearModel();
   void ProcessPendingLoad();
   bool IsModelLoaded() const;
+  void RequestModelLoad(std::string model_file);
 
   void ResetPhysics();
   void UpdatePhysics();
@@ -152,13 +167,15 @@ class App {
   void FileDialogGui();
   void ModelOptionsGui();
   void DataInspectorGui();
+  void SpecExplorerGui();
+  void PropertiesGui();
 
   float GetExpectedLabelWidth();
   std::vector<const char*> GetCameraNames();
 
   std::string error_;
   std::string ini_path_;
-  std::string model_file_;
+  std::string model_name_;
   std::optional<std::string> pending_load_;
 
   std::unique_ptr<platform::Window> window_;

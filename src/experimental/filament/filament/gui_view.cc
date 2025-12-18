@@ -46,6 +46,7 @@ GuiView::GuiView(filament::Engine* engine, ObjectManager* object_mgr)
   scene_ = engine_->createScene();
   camera_ = engine_->createCamera(em.create());
   view_ = engine_->createView();
+  renderable_ = em.create();
   view_->setScene(scene_);
   view_->setCamera(camera_);
   view_->setPostProcessingEnabled(false);
@@ -54,7 +55,17 @@ GuiView::GuiView(filament::Engine* engine, ObjectManager* object_mgr)
 }
 
 GuiView::~GuiView() {
-  ResetRenderable();
+  if (num_elements_ > 0) {
+    scene_->remove(renderable_);
+    auto& rm = engine_->getRenderableManager();
+    rm.destroy(renderable_);
+  }
+  auto& em = utils::EntityManager::get();
+  em.destroy(renderable_);
+  for (auto& buffer : buffers_) {
+    engine_->destroy(buffer.vertex_buffer);
+    engine_->destroy(buffer.index_buffer);
+  }
   for (auto& instance : instances_) {
     engine_->destroy(instance);
   }
@@ -83,6 +94,55 @@ void GuiView::ResetRenderable() {
   buffers_.clear();
 }
 
+uintptr_t GuiView::UploadImage(uintptr_t tex_id, const uint8_t* pixels,
+                               int width, int height, int bpp) {
+  if (bpp != 4 && bpp != 3) {
+    mju_error("Unsupported image bpp. Got %d, wanted 3 or 4", bpp);
+  }
+
+  const auto internal_format =
+      bpp == 4 ? filament::Texture::InternalFormat::RGBA8
+               : filament::Texture::InternalFormat::RGB8;
+  const auto texture_format = bpp == 4 ? filament::Texture::Format::RGBA
+                                       : filament::Texture::Format::RGB;
+
+  filament::Engine* engine = object_mgr_->GetEngine();
+
+  filament::Texture* texture = nullptr;
+  if (tex_id == 0) {
+    texture = filament::Texture::Builder()
+                  .width(width)
+                  .height(height)
+                  .levels(1)
+                  .format(internal_format)
+                  .sampler(filament::Texture::Sampler::SAMPLER_2D)
+                  .build(*engine);
+    tex_id = textures_.size() + 1;
+    textures_[tex_id] = texture;
+  } else {
+    auto iter = textures_.find(tex_id);
+    if (iter == textures_.end()) {
+      mju_error("Texture not found: %lu", tex_id);
+    }
+    texture = iter->second;
+  }
+
+  // Create a copy of the image to pass it to filament as we don't know the
+  // lifetime of the data.
+  const int num_bytes = width * height * bpp;
+  std::byte* bytes = new std::byte[num_bytes];
+  std::memcpy(bytes, pixels, num_bytes);
+  const auto callback = [](void* buffer, size_t size, void* user) {
+    auto* ptr = reinterpret_cast<std::byte*>(user);
+    delete[] ptr;
+  };
+  filament::Texture::PixelBufferDescriptor pb(bytes, num_bytes, texture_format,
+                                              filament::Texture::Type::UBYTE,
+                                              callback);
+  texture->setImage(*engine, 0, std::move(pb));
+  return tex_id;
+}
+
 void GuiView::CreateTexture(ImTextureData* data) {
   filament::Engine* engine = object_mgr_->GetEngine();
   if (data->Format != ImTextureFormat_RGBA32) {
@@ -98,7 +158,7 @@ void GuiView::CreateTexture(ImTextureData* data) {
           .sampler(filament::Texture::Sampler::SAMPLER_2D)
           .build(*engine);
 
-  const uintptr_t tex_id = reinterpret_cast<uintptr_t>(texture);
+  const uintptr_t tex_id = textures_.size() + 1;
   textures_[tex_id] = texture;
   data->SetTexID((ImTextureID)tex_id);
   UpdateTexture(data);
@@ -130,11 +190,10 @@ void GuiView::DestroyTexture(ImTextureData* data) {
 }
 
 bool GuiView::PrepareRenderable() {
-  ResetRenderable();
-
   // Prepare the imgui draw commands. We must call this function even if we do
   // not plan on rendering anything to ensure imgui state is updated.
   ImGui::Render();
+  auto& rm = engine_->getRenderableManager();
 
   ImGuiIO& io = ImGui::GetIO();
   const ImVec2& size = io.DisplaySize;
@@ -153,19 +212,6 @@ bool GuiView::PrepareRenderable() {
     }
     num_elements += cmds->CmdBuffer.size();
   }
-
-  if (size.x == 0 || size.y == 0 || num_elements == 0) {
-    return false;
-  }
-
-  view_->setViewport(
-      filament::Viewport(0.f, 0.f, size.x * scale.x, size.y * scale.y));
-  camera_->setProjection(filament::Camera::Projection::ORTHO, 0.0, size.x,
-                         size.y, 0.0, 0.0, 1.0);
-
-  filament::RenderableManager::Builder builder(num_elements);
-  builder.boundingBox({{-100, -100, -100}, {100, 100, 100}});
-  builder.culling(false);
 
   if (commands->Textures != nullptr) {
     for (ImTextureData* tex : *commands->Textures) {
@@ -191,6 +237,38 @@ bool GuiView::PrepareRenderable() {
       }
     }
   }
+
+  if (size.x == 0 || size.y == 0 || num_elements == 0) {
+    return false;
+  }
+
+  view_->setViewport(
+      filament::Viewport(0.f, 0.f, size.x * scale.x, size.y * scale.y));
+  camera_->setProjection(filament::Camera::Projection::ORTHO, 0.0, size.x,
+                         size.y, 0.0, 0.0, 1.0);
+
+  if (num_elements != num_elements_) {
+    if (num_elements_ > 0) {
+      scene_->remove(renderable_);
+      rm.destroy(renderable_);
+    }
+
+    num_elements_ = num_elements;
+
+    filament::RenderableManager::Builder builder(num_elements_);
+    builder.boundingBox({{-100, -100, -100}, {100, 100, 100}});
+    builder.culling(false);
+    builder.build(*engine_, renderable_);
+    scene_->addEntity(renderable_);
+  }
+
+  for (auto& buffer : buffers_) {
+    engine_->destroy(buffer.vertex_buffer);
+    engine_->destroy(buffer.index_buffer);
+  }
+  buffers_.clear();
+
+  auto ri = rm.getInstance(renderable_);
 
   int drawable_index = 0;
   for (int n = 0; n < commands->CmdListsCount; ++n) {
@@ -232,23 +310,17 @@ bool GuiView::PrepareRenderable() {
       }
 
       mjrRect clip_rect{clip_left, clip_bottom, clip_width, clip_height};
-      builder.material(
-          drawable_index,
+      rm.setMaterialInstanceAt(
+          ri, drawable_index,
           GetMaterialInstance(drawable_index, clip_rect, command.GetTexID()));
-      builder.geometry(drawable_index, kTriangles, buffer.vertex_buffer,
-                      buffer.index_buffer, index_offset,
-                      command.ElemCount);
-      builder.blendOrder(drawable_index, drawable_index);
+      rm.setGeometryAt(ri, drawable_index, kTriangles, buffer.vertex_buffer,
+                       buffer.index_buffer, index_offset, command.ElemCount);
+      rm.setBlendOrderAt(ri, drawable_index, drawable_index);
 
       index_offset += command.ElemCount;
       ++drawable_index;
     }
   }
-
-  auto& em = utils::EntityManager::get();
-  renderable_ = em.create();
-  builder.build(*engine_, renderable_);
-  scene_->addEntity(renderable_);
   return true;
 }
 
@@ -256,18 +328,16 @@ filament::MaterialInstance* GuiView::GetMaterialInstance(int index,
                                                          mjrRect rect,
                                                          uintptr_t texture_id) {
   while (index >= instances_.size()) {
-    auto iter = textures_.find(texture_id);
-    if (iter == textures_.end()) {
-      mju_error("Texture not found: %lu", texture_id);
-    }
+    instances_.push_back(material_->createInstance());
+  }
 
-    filament::TextureSampler sampler;
-    filament::MaterialInstance* instance = material_->createInstance();
-    instance->setParameter("glyph", iter->second, sampler);
-    instances_.push_back(instance);
+  auto iter = textures_.find(texture_id);
+  if (iter == textures_.end()) {
+    mju_error("Texture not found: %lu", texture_id);
   }
 
   filament::MaterialInstance* instance = instances_[index];
+  instance->setParameter("glyph", iter->second, filament::TextureSampler());
   instance->setScissor(rect.left, rect.bottom, rect.width, rect.height);
   return instance;
 }

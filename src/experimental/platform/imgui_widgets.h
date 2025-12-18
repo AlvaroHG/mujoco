@@ -22,12 +22,36 @@
 #include <unordered_map>
 
 #include <imgui.h>
-#include <imgui_internal.h>  // For ButtonEx and PressedOnClick
+#include <imgui_internal.h>
 #include <mujoco/mujoco.h>
 
 namespace mujoco::platform {
 
+// FontAwesome icon codes.
+static constexpr const char ICON_FA_ARROWS[] = "\xEF\x81\x87";
+static constexpr const char ICON_FA_CAMERA[] = "\xEF\x80\xBD";
+static constexpr const char ICON_FA_CARET_LEFT[] = "\xEF\x83\x99";
+static constexpr const char ICON_FA_CARET_RIGHT[] = "\xEF\x83\x9A";
+static constexpr const char ICON_FA_CHECK_SQUARE_O[] = "\xEF\x81\x9D";
+static constexpr const char ICON_FA_COMMENT[] = "\xEF\x83\xA5";
+static constexpr const char ICON_FA_COPY[] = "\xEF\x83\x85";
+static constexpr const char ICON_FA_DIAMOND[] = "\xEF\x88\x99";
+static constexpr const char ICON_FA_EJECT[] = "\xEF\x81\x92";
+static constexpr const char ICON_FA_FAST_FORWARD[] = "\xEF\x81\x90";
+static constexpr const char ICON_FA_MOON[] = "\xEF\x86\x86";
+static constexpr const char ICON_FA_PAUSE[] = "\xEF\x81\x8C";
+static constexpr const char ICON_FA_PLAY[] = "\xEF\x81\x8B";
+static constexpr const char ICON_FA_REFRESH[] = "\xEF\x80\xA1";
+static constexpr const char ICON_FA_SQUARE_O[] = "\xEF\x87\x9B";
+static constexpr const char ICON_FA_SUN[] = "\xEF\x86\x85";
+static constexpr const char ICON_FA_TACHOMETER[] = "\xEF\x83\xA4";
+static constexpr const char ICON_FA_UNDO[] = "\xEF\x83\xA2";
+
 using KeyValues = std::unordered_map<std::string, std::string>;
+
+// This is a workaround to fix compilation on gcc <= 12 and clang <= 16
+template <typename T>
+struct dependent_false : std::false_type {};
 
 // Appends key/value pairs to an Ini file.
 void AppendIniSection(std::string& ini, const std::string& section,
@@ -36,6 +60,27 @@ void AppendIniSection(std::string& ini, const std::string& section,
 // Reads key/value pairs from an Ini file section.
 KeyValues ReadIniSection(const std::string& contents,
                          const std::string& section);
+
+template <typename T>
+T ReadIniValue(const KeyValues& key_values, const std::string& key, T def) {
+  auto iter = key_values.find(key);
+  if (iter == key_values.end()) {
+    return def;
+  }
+  if constexpr (std::is_same_v<T, int>) {
+    return std::stoi(iter->second);
+  } else if constexpr (std::is_same_v<T, float>) {
+    return std::stof(iter->second);
+  } else if constexpr (std::is_same_v<T, double>) {
+    return std::stod(iter->second);
+  } else if constexpr (std::is_same_v<T, std::string>) {
+    return iter->second;
+  } else if constexpr (std::is_enum_v<T>) {
+    return static_cast<T>(std::stoi(iter->second));
+  } else {
+    static_assert(dependent_false<T>::value, "Unsupported type");
+  }
+}
 
 // Helper class for setting ImGui style options; automatically resets the
 // styles when going out of scope.
@@ -107,13 +152,15 @@ bool ImGui_ButtonToggle(const char* label, T* boolean,
   static_assert(std::is_integral_v<T>, "Toggle only supports integral types.");
 
   ScopedStyle style;
-  if (!(*boolean)) {
-    ImColor button = ImGui::GetStyle().Colors[ImGuiCol_Button];
-    button.Value.w = 0.0f;
-    style.Color(ImGuiCol_Button, button);
-  }
+  const int color = *boolean ? ImGuiCol_TabSelected : ImGuiCol_WindowBg;
+  style.Color(ImGuiCol_Button, ImGui::GetStyle().Colors[color]);
+  style.Var(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
 
-  if (ImGui::Button(label, size)) {
+  const std::string txt =
+      std::string(" ") +
+      std::string(*boolean ? ICON_FA_CHECK_SQUARE_O : ICON_FA_SQUARE_O) + "  " +
+      label;
+  if (ImGui::Button(txt.c_str(), size)) {
     *boolean = !(*boolean);
     return true;
   }
@@ -155,10 +202,6 @@ struct ImGuiOpts {
   std::optional<float> width;
   const char* format = std::is_floating_point_v<T> ? "%.3g" : "%d";
 };
-
-// This is a workaround to fix compilation on gcc <= 12 and clang <= 16
-template <typename T>
-struct dependent_false : std::false_type {};
 
 // A compile-time wrapper around ImGui::InputScalarN. This is useful because
 // MuJoCo uses an `mjtNum` type which is an alias for float or double.

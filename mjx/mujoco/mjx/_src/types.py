@@ -14,8 +14,9 @@
 # ==============================================================================
 """Base types used in MJX."""
 
+import dataclasses
 import enum
-from typing import Tuple, Union
+from typing import Any, Tuple, Union
 import warnings
 
 import jax
@@ -29,6 +30,7 @@ class Impl(enum.Enum):
   """Implementation to use."""
 
   C = 'c'
+  CPP = 'cpp'
   JAX = 'jax'
   WARP = 'warp'
 
@@ -529,6 +531,26 @@ class Option(PyTreeNode):
   _impl: Union[OptionJAX, OptionC, mjxw_types.OptionWarp]
 
 
+class ModelCPP(PyTreeNode):
+  """Minimal Model implementation holding only the pointer."""
+  # To ensure that we retain the full pointer even if jax.config.enable_x64 is
+  # set to True, we store the pointer as two 32-bit values. In the FFI call,
+  # we combine the two values into a single pointer value.
+  pointer_lo: jax.Array
+  pointer_hi: jax.Array
+  _model: mujoco.MjModel
+
+
+class DataCPP(PyTreeNode):
+  """Minimal Data implementation holding only the pointer."""
+  # To ensure that we retain the full pointer even if jax.config.enable_x64 is
+  # set to True, we store the pointer as two 32-bit values. In the FFI call,
+  # we combine the two values into a single pointer value.
+  pointer_lo: jax.Array
+  pointer_hi: jax.Array
+  _data: list[Any] = dataclasses.field(default_factory=list, repr=False)
+
+
 class ModelC(PyTreeNode):
   """CPU-specific model data."""
 
@@ -943,6 +965,7 @@ class Model(PyTreeNode):
   def impl(self) -> Impl:
     return {
         ModelC: Impl.C,
+        ModelCPP: Impl.CPP,
         ModelJAX: Impl.JAX,
         mjxw_types.ModelWarp: Impl.WARP,
     }[type(self._impl)]
@@ -1021,7 +1044,6 @@ class DataC(PyTreeNode):
   plugin_data: jax.Array
   light_xpos: jax.Array
   light_xdir: jax.Array
-  cdof: jax.Array
   cinert: jax.Array
   flexvert_xpos: jax.Array
   flexelem_aabb: jax.Array
@@ -1039,7 +1061,6 @@ class DataC(PyTreeNode):
   ten_J: jax.Array  # pylint:disable=invalid-name
   wrap_obj: jax.Array
   wrap_xpos: jax.Array
-  actuator_length: jax.Array
   moment_rownnz: jax.Array  # pylint:disable=invalid-name
   moment_rowadr: jax.Array  # pylint:disable=invalid-name
   moment_colind: jax.Array  # pylint:disable=invalid-name
@@ -1059,7 +1080,7 @@ class DataC(PyTreeNode):
   flexedge_velocity: jax.Array
   ten_velocity: jax.Array
   actuator_velocity: jax.Array
-  cdof_dot: jax.Array
+
   qfrc_spring: jax.Array
   qfrc_damper: jax.Array
   subtree_linvel: jax.Array
@@ -1095,14 +1116,12 @@ class DataJAX(PyTreeNode):
   nefc: int
   ncon: int
   solver_niter: jax.Array
-  cdof: jax.Array
   cinert: jax.Array
   ten_wrapadr: jax.Array
   ten_wrapnum: jax.Array
   ten_J: jax.Array  # pylint:disable=invalid-name
   wrap_obj: jax.Array
   wrap_xpos: jax.Array
-  actuator_length: jax.Array
   actuator_moment: jax.Array
   crb: jax.Array
   qM: jax.Array  # pylint:disable=invalid-name
@@ -1111,7 +1130,7 @@ class DataJAX(PyTreeNode):
   qLDiagInv: jax.Array  # pylint:disable=invalid-name
   ten_velocity: jax.Array
   actuator_velocity: jax.Array
-  cdof_dot: jax.Array
+
   cacc: jax.Array
   cfrc_int: jax.Array
   cfrc_ext: jax.Array
@@ -1171,22 +1190,26 @@ class Data(PyTreeNode):
   cam_xmat: jax.Array
   subtree_com: jax.Array
   cvel: jax.Array
+  cdof: jax.Array
+  cdof_dot: jax.Array
   qfrc_bias: jax.Array
   qfrc_gravcomp: jax.Array
   qfrc_fluid: jax.Array
   qfrc_passive: jax.Array
   qfrc_actuator: jax.Array
   actuator_force: jax.Array
+  actuator_length: jax.Array
   qfrc_smooth: jax.Array
   qacc_smooth: jax.Array
   qfrc_constraint: jax.Array
   qfrc_inverse: jax.Array
-  _impl: Union[DataC, DataJAX, mjxw_types.DataWarp]
+  _impl: Union[DataC, DataCPP, DataJAX, mjxw_types.DataWarp]
 
   @property
   def impl(self) -> Impl:
     return {
         DataC: Impl.C,
+        DataCPP: Impl.CPP,
         DataJAX: Impl.JAX,
         mjxw_types.DataWarp: Impl.WARP,
     }[type(self._impl)]
