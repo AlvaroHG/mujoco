@@ -412,6 +412,8 @@ class MujocoApp {
     // Parameters from placing the robot and camera computed from `actionJson`
     robotInitParameters: any;
 
+    
+
 constructor() {
     this.mjvPerturb = new mujoco.MjvPerturb();
     this.mjvOption = new mujoco.MjvOption();
@@ -438,7 +440,7 @@ constructor() {
       this.controls.autoRotate = false;
       this.controls.minDistance = 0.1;
       // this.controls.maxDistance = 7.0;
-      // this.controls.enableDamping = true;
+      this.controls.enableDamping = true;
       this.controls.dampingFactor = 0.05;
   }
 
@@ -1009,6 +1011,13 @@ constructor() {
     if (this.robotInitParameters.cameraTarget) {
       this.controls.target.set(this.robotInitParameters.cameraTarget.x, this.robotInitParameters.cameraTarget.y, this.robotInitParameters.cameraTarget.z);
     }
+
+    this.lastCameraPositon = this.camera.position.clone();
+    this.controls.autoRotate = false;
+    this.changeFiredLastUpdate = false;
+    this.numberOfNoChangeFired = 0;
+
+    this.handleInteract(null, false);
      let controlsInit = this.getFirstValidAction();
      console.log(`----- controls ${controlsInit}`)
 
@@ -1893,8 +1902,119 @@ constructor() {
   secondsSinceLastAction: number = 0.0;
   timeStampSecondsAtLastCanvasClick: number = 0.0;
   inactiveClickTimeoutId: number = -1;
+  restoreCamera: boolean = false;
+  endOfChange: boolean = false;
 
+  enableAutorotateOnIdle: boolean = true;
+  zoomCountsAsNotIdle: boolean = false;
+  restoreLastCameraPositionOnInteract: boolean = true;
+
+  cameraStoreTimeoutId: number = -1;
   numberOfNoChangeFired: number = 0;
+  maxNumberOfNoChangesToSavePosition: number = 34;
+  savedCameraState: boolean = false;
+
+  controlsChangeEvent: any =  null;
+  controlsLastAutorotate: boolean = false;
+
+  lastCameraPositon: THREE.Vector3 = null;
+  maxInactiveTimeSecondsToAutoRotate: number = 5;
+
+
+  userInteractAndRestoreLastCameraIfIdle(e: any) {
+
+    // console.log(`-------- mouse down userInteractAndRestoreLastCameraIfIdle inactiveClickTimeoutId ${this.inactiveClickTimeoutId} this.restoreCamera ${this.restoreCamera}`)
+    // if (this.inactiveClickTimeoutId > -1 && this.restoreCamera) {
+    if (this.restoreCamera) {
+
+      if(this.restoreLastCameraPositionOnInteract) {
+        this.camera.position.set(this.lastCameraPositon.x, this.lastCameraPositon.y, this.lastCameraPositon.z);
+      }
+      this.restoreCamera = false;
+      this.controls.addEventListener( 'change', this.controlsChangeEvent);
+    }
+    app.handleInteract(e, false);
+    
+
+  }
+
+
+  handleInteract = (e, createInactiveTimeout) => {
+          
+    // if (app.inactiveClickTimeoutId) {}
+    let clockwise = Math.random() < 0.5;
+    this.controls.autoRotate = false;
+    this.controls.autoRotateSpeed = clockwise ? 2 : -2;
+    this.endOfChange = false;
+    // app.camera.position.set(lastCameraPositon.x, lastCameraPositon.y, lastCameraPositon.z);
+    // console.log(`---- camera pos now: ${vecToStr(app.camera.position)}, last cam pos ${vecToStr(lastCameraPositon)}`);
+
+    clearTimeout(this.inactiveClickTimeoutId);
+    this.inactiveClickTimeoutId = -1;
+    if (createInactiveTimeout) {
+      console.log("------- inactive timeout for autorotate")
+      this.inactiveClickTimeoutId = setTimeout(() => {
+        this.lastCameraPositon = this.camera.position.clone();
+        this.restoreCamera = true;
+        this.controls.autoRotate = true;
+        // TODO is this needed
+        clearTimeout(this.inactiveClickTimeoutId); // ?
+        this.inactiveClickTimeoutId = -1; // ?
+
+        app.controls.removeEventListener( 'change', app.controlsChangeEvent);
+      }, this.maxInactiveTimeSecondsToAutoRotate*1000);
+    }
+  
+  }
+
+  setInteractEvents(canvasElementName: string) {
+    if (this.enableAutorotateOnIdle) {
+
+      this.controlsChangeEvent = (e) => {
+      //  console.log(` ---- change autorot ${this.controls.autoRotate}`);
+        // if (!app.controls.autoRotate) {
+          this.changeFired = true;
+        // }
+      }
+      this.controls.addEventListener( 'change', this.controlsChangeEvent);
+
+      let canvasElement = document.getElementById(canvasElementName);
+      
+      if (canvasElement) {
+
+        canvasElement.addEventListener("mousedown", (e) => {
+          this.userInteractAndRestoreLastCameraIfIdle(e);
+        });
+
+        canvasElement.addEventListener("mouseup", (e) => {
+          // console.log("---- mouseup");
+          this.handleInteract(e, true);
+        });
+
+        document.addEventListener( 'mousewheel', (e) => {
+          // console.log(`------- wheel ${e.deltaY} ${e.deltaX}`);
+          // this.handleInteract(e, false);
+
+          //  Only zoom in or out which is scroll Y, not horizontaly on trackpads
+          if (Math.abs(e.deltaY) > 0) {
+            if (this.zoomCountsAsNotIdle) {
+              this.userInteractAndRestoreLastCameraIfIdle(e);
+            }
+            else if (!this.controls.autoRotate && this.inactiveClickTimeoutId > -1) {
+              this.handleInteract(e, false);
+              // 
+            }
+          }
+          // if (!this.controls.autoRotate && this.inactiveClickTimeoutId > -1) {
+          //   clearTimeout(this.inactiveClickTimeoutId);
+          //   this.inactiveClickTimeoutId = -1;
+          // }
+          
+        });
+        
+      }
+    }
+  }
 
 
   update() {
@@ -1904,9 +2024,10 @@ constructor() {
 
       let actionPeriodSeconds = this.actionJson["policy_dt_ms"]/1000;
       
-      // this.changeFiredLastUpdate = this.changeFired;
-      // this.changeFired = false;
-      
+      this.changeFiredLastUpdate = this.changeFired;
+      this.controlsLastAutorotate = this.controls.autoRotate;
+      this.changeFired = false;
+
       this.controls.update();
       // const eps = 0.00008;
       // if (Math.abs(app.controls._sphericalDelta.theta) > eps && Math.abs(app.controls._sphericalDelta.theta) > eps) {
@@ -1915,17 +2036,43 @@ constructor() {
       
       
       // TODO logic to detect when movement has stopped when damping is enabled
-      // if (this.changeFiredLastUpdate && !this.changeFired) {
-      //   this.numberOfNoChangeFired = 1;
-      //   console.log("--------- change last frame");
+      if (this.enableAutorotateOnIdle) {
+      if (!this.controls.autoRotate) {
+        if (this.changeFiredLastUpdate && !this.changeFired) {
+          this.numberOfNoChangeFired = 1;
+          // this.restoreCamera = false;
+          this.endOfChange = true;
+          // console.log("--------- change last frame");
 
-      // }
-      // else {
-      //   if (!this.changeFired) {
-      //     this.numberOfNoChangeFired++;
-      //     console.log(`--------- numberOfNoChangeFired ${this.numberOfNoChangeFired}`);
-      //   }
-      // }
+        }
+        else {
+          //  console.log(` this.endOfChange ${this.endOfChange} changeFired ${this.changeFired} and numberOfNoChangeFired ${this.numberOfNoChangeFired} maxNumberOfNoChangesToSavePosition ${this.maxNumberOfNoChangesToSavePosition} this.restoreCamera ${this.restoreCamera}`)
+          if (!this.changeFired && this.endOfChange) {
+           
+            this.numberOfNoChangeFired++;
+
+            if (this.numberOfNoChangeFired > this.maxNumberOfNoChangesToSavePosition) {
+                // clearTimeout(app.cameraStoreTimeoutId);
+                // app.restoreCamera = false;
+                // app.cameraStoreTimeoutId = setTimeout(() => {
+                //   app.lastCameraPositon = app.camera.position.clone();
+                //   app.restoreCamera = true;
+                // }, 3000);
+                // this.lastCameraPositon = this.camera.position.clone();
+                
+                this.endOfChange = false;
+              
+              
+                // handleMouseInteract(e, true);
+                this.handleInteract(null, true);
+              
+
+            }
+          }
+        }
+
+      }
+    }
       
   
       if (!this.paused) {
@@ -2268,6 +2415,10 @@ function printAllFiles() {
 
     // console.log(`----- theta ${app.controls._sphericalDelta.theta}`);
 
+    
+
+
+
     // app.controls.addEventListener( 'change', (e) => {
     //   // console.log(`---- change camera event ${e}`)
     //   // console.log(`----- theta ${app.controls._sphericalDelta.theta} phi ${app.controls._sphericalDelta.theta}`);
@@ -2290,6 +2441,7 @@ function printAllFiles() {
 
     // } );
 
+
       let  lastCameraPositon: THREE.Vector3 = app.camera.position.clone();
   
       const pauseButtonElement = document.getElementById('pause-button');
@@ -2300,7 +2452,7 @@ function printAllFiles() {
       if (resetButtonElement) {
         
         resetButtonElement.onclick = () => app.resetButton();
-        lastCameraPositon = app.camera.position.clone();
+        
       }
       const contactButtonElement = document.getElementById('contact-button');
       if (contactButtonElement) {
@@ -2321,86 +2473,8 @@ function printAllFiles() {
         };
       }
 
-      let canvasElement = document.getElementById('mujoco-canvas');
-
-      let maxInactiveTimeSecondsToAutoRotate = 16;
+      app.setInteractEvents('mujoco-canvas');
       
-      if (canvasElement) {
-
-        let cameraStoreTimeoutId = -1; 
-        let restoreCamera = false;
-        let rostoreToLastUserCameraPos = true;
-        
-        let handleMouseInteract = (e, createInactiveTimeout) => {
-          
-          // if (app.inactiveClickTimeoutId) {}
-          let clockwise = Math.random() < 0.5;
-          app.controls.autoRotate = false;
-          app.controls.autoRotateSpeed = clockwise ? 2 : -2;
-          // app.camera.position.set(lastCameraPositon.x, lastCameraPositon.y, lastCameraPositon.z);
-          // console.log(`---- camera pos now: ${vecToStr(app.camera.position)}, last cam pos ${vecToStr(lastCameraPositon)}`);
-
-          clearTimeout(app.inactiveClickTimeoutId);
-          app.inactiveClickTimeoutId = -1;
-          if (createInactiveTimeout) {
-            
-            app.inactiveClickTimeoutId = setTimeout(() => {
-              lastCameraPositon = app.camera.position.clone();
-              app.controls.autoRotate = true;
-            }, maxInactiveTimeSecondsToAutoRotate*1000);
-          }
-        
-        }
-
-        canvasElement.addEventListener("mousedown", (e) => {
-            // console.log("------- 'mousedown'");
-            if (app.inactiveClickTimeoutId > -1 && restoreCamera && rostoreToLastUserCameraPos) {
-              // let userDistanceWhileRotated =  app.controls.target.clone().sub(app.camera.position).length();
-              app.camera.position.set(lastCameraPositon.x, lastCameraPositon.y, lastCameraPositon.z);
-
-              // Uncomment if we want to add the extra zoom user did while autorotating
-              // let targetToLastCameraPos = app.controls.target.clone().sub(lastCameraPositon);
-              // let extraUserDist =  targetToLastCameraPos.length() - userDistanceWhileRotated;
-
-              // let dir = targetToLastCameraPos.normalize();
-              // let finalPos = dir.multiplyScalar(extraUserDist).add(lastCameraPositon);
-              // app.camera.position.set(finalPos.x, finalPos.y, finalPos.z);
-              
-            }
-            handleMouseInteract(e, false);
-            
-          });
-
-          canvasElement.addEventListener("mouseup", (e) => {
-            // console.log("------- 'mouseup'");
-            if (rostoreToLastUserCameraPos) {
-              clearTimeout(cameraStoreTimeoutId);
-              restoreCamera = false;
-              cameraStoreTimeoutId = setTimeout(() => {
-                lastCameraPositon = app.camera.position.clone();
-                restoreCamera = true;
-              }, 3000);
-            }
-            
-            handleMouseInteract(e, true);
-            
-          });
-
-        // canvasElement.addEventListener("wheel", (e) => {
-        //     handleMouseInteract(e);
-        // });
-
-          // canvasElement.addEventListener("mousedown", (e) => {
-          //   console.log("------- 'mousedown mouseup'");
-          //   app.controls.autoRotate = false;
-          // });
-        //   canvasElement.addEventListener("click", (e) => {
-        //     console.log("------- click event");
-        //     handleMouseInteract(e);
-          
-        // });
-      }
-
   
       const tarFileName = tarPath;
      
