@@ -21,7 +21,48 @@ except ImportError:
     print("Warning: mujoco not available. --with-robot-xml option will not work.")
 
 
-def add_robot_to_scene(scene_path, robot_xml_path, output_path=None, path_prefix="../"):
+def remove_robot_material_bug_from_xml(xml_path):
+    """
+    Remove entire material elements that contain shininess attribute (they cause bugs).
+    This removes the whole <material shininess="..."/> element, not just the attribute.
+    
+    Args:
+        xml_path: Path to the XML file to process
+    """
+    import re
+    
+    xml_path = Path(xml_path)
+    if not xml_path.exists():
+        return
+    
+    with open(xml_path, 'r') as f:
+        content = f.read()
+    
+    # Pattern to match entire material tags with shininess attribute
+    # Matches:
+    # <material shininess="0.25"/>
+    # <material shininess="0.25" other="attr"/>
+    # <material other="attr" shininess="0.25"/>
+    # <material shininess="0.25" other="attr" more="value"/>
+    # Also handles multi-line material tags
+    pattern = r'<material\s+[^>]*?shininess=["\'][^"\']+["\'][^>]*?/?>\s*'
+    
+    # Remove all material tags that contain shininess
+    new_content = re.sub(pattern, '', content, flags=re.MULTILINE)
+    
+    # Also handle material tags that might span multiple lines
+    # Pattern for multi-line material tags with shininess
+    multiline_pattern = r'<material\s+[^>]*?shininess=["\'][^"\']+["\'][^>]*?>\s*</material>\s*'
+    new_content = re.sub(multiline_pattern, '', new_content, flags=re.MULTILINE | re.DOTALL)
+    
+    if new_content != content:
+        with open(xml_path, 'w') as f:
+            f.write(new_content)
+        removed_count = len(re.findall(pattern, content))
+        print(f"  Removed {removed_count} material element(s) with shininess attribute")
+
+
+def add_robot_to_scene(scene_path, robot_xml_path, output_path=None, path_prefix="../", remove_robot_material_bug=False):
     """
     Add robot to a MuJoCo scene.
     
@@ -30,6 +71,7 @@ def add_robot_to_scene(scene_path, robot_xml_path, output_path=None, path_prefix
         robot_xml_path: Path to the robot XML file
         output_path: Output XML path (default: scene_path with _with_robot.xml suffix)
         path_prefix: Prefix to add to relative paths (default: "../")
+        remove_robot_material_bug: Whether to remove material elements with shininess attribute (they cause bugs)
     
     Returns:
         Path to the generated scene XML file
@@ -46,6 +88,19 @@ def add_robot_to_scene(scene_path, robot_xml_path, output_path=None, path_prefix
         output_path = scene_path.parent / (scene_path.stem + "_with_robot.xml")
     else:
         output_path = Path(output_path).resolve()
+    
+    # Preserve original gridlayout values before MuJoCo modifies them
+    original_gridlayouts = {}
+    try:
+        tree = ET.parse(scene_path)
+        root = tree.getroot()
+        for texture in root.findall('.//texture'):
+            name = texture.get('name')
+            gridlayout = texture.get('gridlayout')
+            if name and gridlayout:
+                original_gridlayouts[name] = gridlayout
+    except Exception:
+        pass  # If we can't read it, continue anyway
     
     print(f"Adding robot from {robot_path} to scene {scene_path}")
     spec = mujoco.MjSpec().from_file(str(scene_path))
@@ -181,10 +236,35 @@ def add_robot_to_scene(scene_path, robot_xml_path, output_path=None, path_prefix
     model = spec.compile()
     spec.to_file(str(output_path))
     
+    # Restore original gridlayout values (MuJoCo sometimes modifies them incorrectly)
+    if original_gridlayouts:
+        try:
+            tree = ET.parse(output_path)
+            root = tree.getroot()
+            restored_count = 0
+            for texture in root.findall('.//texture'):
+                name = texture.get('name')
+                if name in original_gridlayouts:
+                    original_gridlayout = original_gridlayouts[name]
+                    current_gridlayout = texture.get('gridlayout', '')
+                    if current_gridlayout != original_gridlayout:
+                        texture.set('gridlayout', original_gridlayout)
+                        restored_count += 1
+            if restored_count > 0:
+                tree.write(str(output_path), encoding='utf-8', xml_declaration=True)
+                print(f"  Restored {restored_count} gridlayout attribute(s) to original values")
+        except Exception as e:
+            print(f"  Warning: Could not restore gridlayout values: {e}")
+    
     # Post-process XML to apply custom path prefix if provided
     if path_prefix and path_prefix != '../':
         print(f"Post-processing XML to apply path prefix: {path_prefix}")
         post_process_xml_paths(output_path, path_prefix, robot_paths, robot_path)
+    
+    # Remove robot material bug if requested
+    if remove_robot_material_bug:
+        print(f"Removing material elements with shininess attribute (bug fix)...")
+        remove_robot_material_bug_from_xml(output_path)
     
     print(f"\n✓ Saved scene to {output_path}")
     return output_path
@@ -643,6 +723,313 @@ def resolve_file_path(file_path_str, xml_parent_dir, source_dir):
     return None
 
 
+def copy_external_files_and_update_xml(xml_file, source_dir, temp_dir):
+    """
+    Copy external files referenced by XML to objects/ directory and update XML references.
+    
+    Args:
+        xml_file: Path to the XML file (in temp_dir)
+        source_dir: Source directory (where original XML is located)
+        temp_dir: Temporary directory where we're working
+    
+    Returns:
+        True if any external files were copied, False otherwise
+    """
+    xml_file = Path(xml_file).resolve()
+    source_dir = Path(source_dir).resolve()
+    temp_dir = Path(temp_dir).resolve()
+    
+    # Parse XML to find external references
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
+    
+    external_files_copied = False
+    objects_dir = temp_dir / 'objects'
+    objects_dir.mkdir(exist_ok=True)
+    
+    # Track file path mappings: original_path -> new_path
+    path_mappings = {}
+    
+    # Function to process file attributes
+    def process_file_attr(file_attr, xml_parent_dir):
+        if not file_attr or file_attr.startswith('/'):
+            return file_attr
+        
+        # Check if this is an external reference (starts with ../)
+        if file_attr.startswith('../'):
+            # Resolve the external path from the original XML location
+            original_xml_parent = source_dir  # XML is in source_dir for new format
+            try:
+                external_path = (original_xml_parent / file_attr).resolve()
+                
+                # Check if it's outside source_dir (regardless of whether it exists)
+                is_external = False
+                try:
+                    external_path.relative_to(source_dir)
+                    # It's within source_dir, not external
+                    return file_attr
+                except ValueError:
+                    # This is an external file reference, update the path
+                    is_external = True
+                
+                if is_external:
+                    # Extract the path after ../../
+                    # Get the path after all ../
+                    parts = file_attr.split('../')
+                    # Remove empty parts and get the actual path
+                    actual_path_parts = [p for p in parts if p and p.strip()]
+                    if actual_path_parts:
+                        # Join the parts to get the relative path structure
+                        relative_structure = '/'.join(actual_path_parts).strip('/')
+                        
+                        # Preserve the structure but put it under objects/
+                        # If it already starts with objects/, strip it since objects_dir already has objects/
+                        if relative_structure.startswith('objects/'):
+                            # Remove 'objects/' prefix since objects_dir already includes it
+                            target_relative = relative_structure[8:]  # len('objects/') = 8
+                        else:
+                            # Otherwise, put it under objects/
+                            target_relative = relative_structure
+                        
+                        # Copy file if it exists and not already copied
+                        target_path = objects_dir / target_relative
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        # Try to find the file - check multiple possible locations
+                        file_found = False
+                        file_to_copy = None
+                        
+                        if external_path.exists():
+                            file_to_copy = external_path
+                            file_found = True
+                        else:
+                            # Try alternative locations
+                            # 1. Check if objects/ is directly under the cache root (not under scenes/)
+                            # Remove leading ../ from path
+                            clean_path = file_attr
+                            while clean_path.startswith('../'):
+                                clean_path = clean_path[3:]
+                            
+                            # Try base cache directory
+                            cache_root = source_dir
+                            # Go up to find mujoco-thor-resources
+                            for _ in range(5):
+                                if cache_root.name == 'mujoco-thor-resources':
+                                    break
+                                cache_root = cache_root.parent
+                            
+                            # Try objects/ directly under cache root
+                            # clean_path already has 'objects/' prefix, so use it directly
+                            alt_paths = [
+                                cache_root / clean_path,  # objects/thor/...
+                            ]
+                            
+                            # Also try with date subdirectories
+                            # For thor files: objects/thor/20251117/...
+                            if 'thor' in clean_path:
+                                parts = clean_path.split('/')
+                                if 'thor' in parts:
+                                    idx = parts.index('thor')
+                                    for date_dir in ['20251117', '20251205']:
+                                        dated_parts = parts[:idx+1] + [date_dir] + parts[idx+1:]
+                                        dated_path = '/'.join(dated_parts)
+                                        alt_paths.append(cache_root / dated_path)
+                            
+                            # For objaverse files: objects/objaverse/20251016_from_20250610/...
+                            if 'objaverse' in clean_path:
+                                parts = clean_path.split('/')
+                                if 'objaverse' in parts:
+                                    idx = parts.index('objaverse')
+                                    # Try common objaverse date subdirectories
+                                    for date_dir in ['20251016_from_20250610', '20250610', '20251016']:
+                                        dated_parts = parts[:idx+1] + [date_dir] + parts[idx+1:]
+                                        dated_path = '/'.join(dated_parts)
+                                        alt_paths.append(cache_root / dated_path)
+                                    
+                                    # Also try searching in objaverse subdirectories
+                                    objaverse_base = cache_root / 'objects' / 'objaverse'
+                                    if objaverse_base.exists():
+                                        file_name = Path(clean_path).name
+                                        obj_id = Path(clean_path).parent.name if '/' in clean_path else None
+                                        if obj_id:
+                                            # Search in objaverse subdirectories
+                                            for subdir in objaverse_base.iterdir():
+                                                if subdir.is_dir():
+                                                    test_path = subdir / obj_id / file_name
+                                                    if test_path.exists():
+                                                        alt_paths.append(test_path)
+                                                        break  # Found it, no need to search more
+                            
+                            for alt_path in alt_paths:
+                                if alt_path.exists():
+                                    file_to_copy = alt_path
+                                    file_found = True
+                                    break
+                        
+                        if file_found and file_to_copy:
+                            if not target_path.exists():
+                                try:
+                                    shutil.copy2(file_to_copy, target_path)
+                                    external_files_copied = True
+                                    if file_to_copy != external_path:
+                                        if len(path_mappings) % 100 == 0:
+                                            print(f"  Copied {len(path_mappings)} external files (found at alt location)...")
+                                    else:
+                                        if len(path_mappings) % 100 == 0:
+                                            print(f"  Copied {len(path_mappings)} external files so far...")
+                                except Exception as e:
+                                    print(f"  Error copying {file_to_copy} to {target_path}: {e}")
+                        elif not target_path.exists():
+                            # File not found, but we still update the path in XML
+                            # MuJoCo will fail to load it, but at least the path is correct
+                            if len(path_mappings) % 500 == 0:
+                                print(f"  Warning: External file not found (updating path anyway): {file_attr[:60]}... (checked {len(alt_paths)} locations)")
+                        
+                        # Map original path to new path
+                        # For XML, we want objects/thor/... not just thor/...
+                        # So use relative_structure (which has objects/) not target_relative
+                        new_path = relative_structure.replace('\\', '/')
+                        path_mappings[file_attr] = new_path
+                        return new_path
+            except (ValueError, OSError) as e:
+                # If we can't resolve the path, still try to update it
+                # Extract the path structure and update
+                parts = file_attr.split('../')
+                actual_path_parts = [p for p in parts if p and p.strip()]
+                if actual_path_parts:
+                    relative_structure = '/'.join(actual_path_parts).strip('/')
+                    if relative_structure.startswith('objects/'):
+                        target_relative = relative_structure
+                    else:
+                        target_relative = 'objects/' + relative_structure
+                    new_path = target_relative.replace('\\', '/')
+                    path_mappings[file_attr] = new_path
+                    return new_path
+                pass
+        
+        # Check if file is within source_dir (for relative paths without ../)
+        try:
+            file_path = (xml_parent_dir / file_attr).resolve()
+            if file_path.exists():
+                try:
+                    file_path.relative_to(source_dir)
+                    # File is within source_dir, no need to copy
+                    return file_attr
+                except ValueError:
+                    # File exists but is outside source_dir
+                    # This shouldn't happen for non-../ paths, but handle it
+                    pass
+        except (ValueError, OSError):
+            pass
+        
+        return file_attr
+    
+    # Process all file attributes in the XML
+    # For new format, xml_parent_dir is source_dir (where XML is)
+    xml_parent_dir = source_dir
+    
+    # Process asset section
+    asset_section = root.find('asset')
+    if asset_section is not None:
+        for asset in asset_section:
+            file_attr = asset.get('file', '')
+            if file_attr:
+                new_path = process_file_attr(file_attr, xml_parent_dir)
+                if new_path != file_attr:
+                    asset.set('file', new_path)
+                    print(f"    Updated asset file: {file_attr} -> {new_path}")
+    
+    # Process all elements with file, mesh, hfield attributes
+    updated_count = 0
+    skipped_count = 0
+    for elem in root.iter():
+        for attr_name in ['file', 'mesh', 'hfield']:
+            file_attr = elem.get(attr_name, '')
+            if file_attr:
+                new_path = process_file_attr(file_attr, xml_parent_dir)
+                if new_path != file_attr:
+                    elem.set(attr_name, new_path)
+                    updated_count += 1
+                    if updated_count <= 10:  # Limit debug output
+                        print(f"    Updated {attr_name}: {file_attr[:60]}... -> {new_path[:60]}...")
+                elif file_attr.startswith('../'):
+                    # This is a ../ path that wasn't updated - might be an issue
+                    skipped_count += 1
+                    if skipped_count <= 5:
+                        print(f"    Warning: Skipped updating {attr_name}: {file_attr[:80]}...")
+    if updated_count > 10:
+        print(f"    ... and {updated_count - 10} more file references updated")
+    if skipped_count > 5:
+        print(f"    ... and {skipped_count - 5} more file references skipped")
+    
+    # Also process include tags - copy and update included XML files
+    for include_elem in root.findall('.//include'):
+        include_file_attr = include_elem.get('file', '')
+        if include_file_attr:
+            # Resolve the include file path
+            try:
+                include_path = (xml_parent_dir / include_file_attr).resolve()
+                if include_path.exists() and include_path.suffix == '.xml':
+                    # Check if it's external
+                    try:
+                        include_path.relative_to(source_dir)
+                        # It's within source_dir, process it recursively
+                        copy_external_files_and_update_xml(include_path, source_dir, temp_dir)
+                    except ValueError:
+                        # It's external, copy it and update reference
+                        # For now, just update the path if needed
+                        new_include_path = process_file_attr(include_file_attr, xml_parent_dir)
+                        if new_include_path != include_file_attr:
+                            include_elem.set('file', new_include_path)
+            except (ValueError, OSError):
+                pass
+    
+    # Always save the XML (even if no path_mappings, we might have updated includes)
+    # Ensure file is writable
+    xml_file.chmod(0o644)
+    # Write XML with declaration - use file handle to avoid permission issues
+    try:
+        with open(xml_file, 'wb') as f:
+            tree.write(f, encoding='utf-8', xml_declaration=True)
+    except PermissionError:
+        # If direct write fails, try writing to temp file then moving
+        import tempfile
+        temp_xml_path = xml_file.parent / f".{xml_file.name}.tmp"
+        try:
+            with open(temp_xml_path, 'wb') as f:
+                tree.write(f, encoding='utf-8', xml_declaration=True)
+            temp_xml_path.replace(xml_file)
+        except Exception as e2:
+            raise PermissionError(f"Could not write XML file {xml_file}: {e2}")
+    
+    if path_mappings:
+        print(f"  Updated {len(path_mappings)} external file references in XML")
+    
+    return external_files_copied
+
+
+def remove_empty_directories(directory):
+    """
+    Recursively remove empty directories.
+    
+    Args:
+        directory: Path to directory to clean
+    """
+    removed_count = 0
+    for root, dirs, files in os.walk(directory, topdown=False):
+        root_path = Path(root)
+        # Remove empty subdirectories first
+        for d in dirs:
+            dir_path = root_path / d
+            try:
+                if not any(dir_path.iterdir()):
+                    dir_path.rmdir()
+                    removed_count += 1
+            except OSError:
+                pass
+    return removed_count
+
+
 def clean_directory(source_dir, target_dir, referenced_files, keep_mtl=False, keep_files=None):
     """
     Copy source directory to target directory, removing files not in referenced_files.
@@ -710,6 +1097,11 @@ def clean_directory(source_dir, target_dir, referenced_files, keep_mtl=False, ke
     if files_to_remove:
         print(f'  Removed {len(files_to_remove)} unreferenced files')
     
+    # Remove empty directories
+    removed_dirs = remove_empty_directories(target_dir)
+    if removed_dirs > 0:
+        print(f'  Removed {removed_dirs} empty directories')
+    
     return files_copied
 
 
@@ -753,6 +1145,10 @@ def generate_tar(scene_dir, scene_xml_name, output_tar, clean=False, keep_mtl=Fa
     
     print(f'Using scene XML: {xml_file}')
     
+    # Detect if we're working with the new format (XMLs in root, like holodeck-objaverse-train)
+    # Check if XML is directly in source_dir (not in a subdirectory)
+    is_new_format = xml_file.parent == source_dir
+    
     if keep_dir:
         target_dir_name = f"{source_dir.name}_tar"
         target_dir = source_dir.parent / target_dir_name
@@ -764,19 +1160,76 @@ def generate_tar(scene_dir, scene_xml_name, output_tar, clean=False, keep_mtl=Fa
         print(f'Removing existing target directory: {target_dir}')
         shutil.rmtree(target_dir)
     
+    # Create target directory structure
+    target_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Check if external files have already been processed (XML has objects/ references instead of ../)
+    xml_content = xml_file.read_text(encoding='utf-8')
+    has_external_refs = '../' in xml_content
+    has_objects_refs = 'objects/' in xml_content or 'file="objects/' in xml_content
+    
+    # For new format, we need to:
+    # 1. Copy only the specific XML file to temp directory
+    # 2. Copy external files to objects/ directory (if not already done)
+    # 3. Update XML references (if not already done)
+    # 4. Keep matching asset directories (e.g., train_55609_assets for train_55609.xml)
+    if is_new_format and has_external_refs and not has_objects_refs:
+        print(f'\nDetected new format (XML in root): copying scene files...')
+        
+        # Copy the XML file to temp directory
+        target_xml = target_dir / scene_xml_name
+        shutil.copy2(xml_file, target_xml)
+        
+        # Copy external files and update XML references
+        print(f'Processing external file references...')
+        copy_external_files_and_update_xml(target_xml, source_dir, target_dir)
+        
+        # Determine matching asset directory name (e.g., train_55609_assets for train_55609.xml)
+        xml_stem = xml_file.stem  # e.g., train_55609
+        matching_assets_dir = source_dir / f"{xml_stem}_assets"
+        if matching_assets_dir.exists() and matching_assets_dir.is_dir():
+            # Copy matching assets directory
+            target_assets = target_dir / matching_assets_dir.name
+            shutil.copytree(matching_assets_dir, target_assets, dirs_exist_ok=True)
+            print(f'  Copied matching assets directory: {matching_assets_dir.name}')
+        
+        # Update source_dir and xml_file to point to temp directory for cleaning
+        source_dir_for_cleaning = target_dir
+        xml_file_for_cleaning = target_xml
+    elif is_new_format and (has_objects_refs or not has_external_refs):
+        # External files already processed, just copy everything from source_dir
+        print(f'\nDetected new format (XML in root, external files already processed): copying scene files...')
+        shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+        source_dir_for_cleaning = target_dir
+        xml_file_for_cleaning = target_dir / scene_xml_name
+    else:
+        # Old format: copy entire directory structure
+        print(f'\nDetected old format (self-contained): copying directory...')
+        shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+        source_dir_for_cleaning = target_dir
+        xml_file_for_cleaning = target_dir / scene_xml_name
+    
     if clean:
         referenced_files = collect_referenced_files(
-            xml_file, source_dir, 
+            xml_file_for_cleaning, source_dir_for_cleaning, 
             resource_reference_xml=resource_reference_xml,
             keep_mtl=keep_mtl
         )
         print(f'Found {len(referenced_files)} referenced files')
         
-        clean_directory(source_dir, target_dir, referenced_files, keep_mtl=keep_mtl, keep_files=keep_files)
-    else:
-        print(f'\nCopying entire directory...')
-        shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
-        print(f'  Copied directory to: {target_dir}')
+        # Create a temporary directory for cleaning
+        import tempfile
+        clean_temp_dir = Path(tempfile.mkdtemp(prefix=f"{source_dir.name}_clean_"))
+        
+        clean_directory(source_dir_for_cleaning, clean_temp_dir, referenced_files, keep_mtl=keep_mtl, keep_files=keep_files)
+        
+        # Replace target_dir with cleaned version
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        shutil.move(clean_temp_dir, target_dir)
+    elif not is_new_format:
+        # For old format without clean, we already copied above
+        pass
     
     # Create tar file
     tar_name = str(output_tar)
@@ -820,12 +1273,21 @@ def main():
                        help='Generate cleaned tar for robot first, saving to this path')
     parser.add_argument('--robot-path-prefix', type=str, default='../',
                        help='Path prefix for robot assets in generated scene (default: ../)')
+    parser.add_argument('--remove-robot-material-bug', action='store_true',
+                       help='Remove entire material elements with shininess attribute (they cause bugs, only with --with-robot-xml)')
     
     args = parser.parse_args()
     
     source_dir = Path(args.scene_dir).resolve()
     scene_xml_name = args.scene_xml
     scene_xml_path = source_dir / scene_xml_name
+    
+    if not scene_xml_path.exists():
+        print(f"Error: Scene XML file not found: {scene_xml_path}")
+        sys.exit(1)
+    
+    # Detect if we're working with the new format (XMLs in root)
+    is_new_format = scene_xml_path.parent == source_dir
     
     # Parse keep-files
     keep_files = []
@@ -834,24 +1296,88 @@ def main():
         if keep_files:
             print(f'Keeping additional files: {keep_files}')
     
+    # For new format, we need to process external files first before adding robot
+    # Create a temporary directory to work in
+    import tempfile
+    work_dir = None
+    processed_xml_path = scene_xml_path
+    
+    if is_new_format:
+        print(f'\nDetected new format (XML in root): preparing scene...')
+        work_dir = Path(tempfile.mkdtemp(prefix=f"{source_dir.name}_work_"))
+        
+        # Copy the XML file to work directory
+        work_xml = work_dir / scene_xml_name
+        shutil.copy2(scene_xml_path, work_xml)
+        # Ensure the file is writable
+        work_xml.chmod(0o644)
+        
+        # Copy external files and update XML references
+        print(f'Processing external file references...')
+        original_source_dir = source_dir  # Keep reference to original
+        external_files_copied = copy_external_files_and_update_xml(work_xml, original_source_dir, work_dir)
+        
+        # Verify XML was updated - check for remaining ../ references that should have been updated
+        updated_content = work_xml.read_text(encoding='utf-8')
+        # Count ../ references in file attributes (not in comments or other places)
+        import re
+        file_refs_with_dotdot = re.findall(r'file=["\']([^"\']*\.\.\/[^"\']*)["\']', updated_content)
+        mesh_refs_with_dotdot = re.findall(r'mesh=["\']([^"\']*\.\.\/[^"\']*)["\']', updated_content)
+        hfield_refs_with_dotdot = re.findall(r'hfield=["\']([^"\']*\.\.\/[^"\']*)["\']', updated_content)
+        remaining_refs = file_refs_with_dotdot + mesh_refs_with_dotdot + hfield_refs_with_dotdot
+        
+        if remaining_refs:
+            print(f"  Warning: Found {len(remaining_refs)} file references still containing ../ after processing:")
+            for ref in remaining_refs[:5]:  # Show first 5
+                print(f"    - {ref}")
+            if len(remaining_refs) > 5:
+                print(f"    ... and {len(remaining_refs) - 5} more")
+        else:
+            print(f"  Verified: All external file references updated successfully")
+        
+        # Determine matching asset directory name (e.g., train_55609_assets for train_55609.xml)
+        xml_stem = scene_xml_path.stem  # e.g., train_55609
+        matching_assets_dir = source_dir / f"{xml_stem}_assets"
+        if matching_assets_dir.exists() and matching_assets_dir.is_dir():
+            # Copy matching assets directory
+            work_assets = work_dir / matching_assets_dir.name
+            shutil.copytree(matching_assets_dir, work_assets, dirs_exist_ok=True)
+            print(f'  Copied matching assets directory: {matching_assets_dir.name}')
+        
+        # Update source_dir and xml_path to point to work directory
+        source_dir = work_dir
+        processed_xml_path = work_xml
+    
     # Handle robot integration
     scene_with_robot_path = None
     if args.with_robot_xml:
         if not MUJOCO_AVAILABLE:
             print("Error: mujoco is required for --with-robot-xml option")
+            if work_dir:
+                shutil.rmtree(work_dir)
             sys.exit(1)
         
         robot_xml_path = Path(args.with_robot_xml).resolve()
         if not robot_xml_path.exists():
             print(f"Error: Robot XML file not found: {robot_xml_path}")
+            if work_dir:
+                shutil.rmtree(work_dir)
             sys.exit(1)
         
-        # Generate scene with robot
+        # Generate scene with robot (using processed XML if new format)
+        if work_dir:
+            # Output to work directory
+            output_xml = work_dir / (processed_xml_path.stem + "_with_robot.xml")
+        else:
+            # Output to same directory as original scene
+            output_xml = None
+        
         scene_with_robot_path = add_robot_to_scene(
-            scene_xml_path,
+            processed_xml_path,
             robot_xml_path,
-            output_path=None,  # Will use default _with_robot.xml
-            path_prefix=args.robot_path_prefix
+            output_path=output_xml,
+            path_prefix=args.robot_path_prefix,
+            remove_robot_material_bug=args.remove_robot_material_bug
         )
         
         # If cleaning robot tar, do it now
@@ -878,7 +1404,7 @@ def main():
     # If we have scene_with_robot, use it as both source XML and resource reference
     scene_keep_files = keep_files.copy() if keep_files else []
     if scene_with_robot_path:
-        # scene_with_robot.xml is in the same directory as the original scene
+        # scene_with_robot.xml is in work_dir (if new format) or original scene dir
         source_xml = scene_with_robot_path.name
         resource_ref = scene_with_robot_path
         # Also keep the original XML file
@@ -898,6 +1424,11 @@ def main():
         keep_files=scene_keep_files,
         resource_reference_xml=resource_ref
     )
+    
+    # Clean up work directory if it was created
+    if work_dir and not args.dir_keep:
+        print(f'Removing work directory: {work_dir}')
+        shutil.rmtree(work_dir)
 
 
 if __name__ == '__main__':

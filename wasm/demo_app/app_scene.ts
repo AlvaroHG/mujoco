@@ -1571,7 +1571,7 @@ createLightsFromModel() {
       URL.revokeObjectURL(url);
     });
   }
-
+  updateCtrlDir: number = 1.0;
 
   update() {
     if (!this.mjModel || !this.mjData) {
@@ -1583,6 +1583,16 @@ createLightsFromModel() {
     if (!app.paused) {
       let sim_start = app.mjData.time;
       while (app.mjData.time - sim_start < 1. / 60.) {
+        app.mjData.ctrl[6] += 0.0001;
+        // let dir = 1.0;
+        if (this.updateCtrlDir > 0 && app.mjData.ctrl[5] >= 3.0) {
+          this.updateCtrlDir = -1.0;
+        }
+        else if (this.updateCtrlDir < 0 && app.mjData.ctrl[5] < 0.01) {
+          this.updateCtrlDir = 1.0;
+        }
+        console.log(app.mjData.ctrl[5])
+        app.mjData.ctrl[5] += this.updateCtrlDir * 0.001;
         mujoco.mj_step(app.mjModel, app.mjData);
       }
     }
@@ -2022,6 +2032,9 @@ window.clearTarCache = clearTarCache;
 
 // main("scenes/procthor-objaverse-train-12_small.tar", "train_12.xml");
 // main("scenes/holodeck-objaverse-train-12_small.tar", "train_12.xml");
+
+main("scenes/procthor_objaverse_817_fix.tar", "train_817_with_robot.xml")
+
 // main("scenes/train_2_small.tar", "train_2.xml", "robots/franka_droid_small.tar", "model.xml");
 
 
@@ -2039,7 +2052,7 @@ window.clearTarCache = clearTarCache;
 
 // main("scenes/ithor-bundled-all.tar", "FloorPlan1_physics_with_robot.xml");
 
-main("scenes/ithor-bundled_small.tar", "FloorPlan1_physics.xml");
+// main("scenes/ithor-bundled_small.tar", "FloorPlan1_physics.xml");
 
 
 
@@ -2049,3 +2062,4 @@ main("scenes/ithor-bundled_small.tar", "FloorPlan1_physics.xml");
 
 // main("scenes/ithor-bundled_w_robot.tar", "FloorPlan1_physics_with_robot.xml", "robots/ffranka_droid_small.tar", "model.xml");
 
+//main("scenes/ithor-bundled-all_2.tar", "FloorPlan1_physics_with_robot.xml");

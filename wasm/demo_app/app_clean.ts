@@ -7,6 +7,17 @@ declare function loadMujoco(): Promise<MainModule>;
 
 let mujoco: any;
 
+function vecToStr(vec: THREE.Vector3) {
+    return `{x: ${vec.x}, y: ${vec.y}, z: ${vec.z}}`;
+  }
+
+  enum BodyAxis {
+    forward = "forward",
+    back = "back",
+    left = "left",
+    right = "right",
+  }
+
 function extractFileReferences(xmlContent: string, baseDir: string): Set<string> {
     const files = new Set<string>();
     const parser = new DOMParser();
@@ -236,8 +247,13 @@ async function deleteFileFromCache(tarPath: string): Promise<boolean> {
         // and store in cache
         const responseToCache = response.clone();
         if (addToCache) {
+            try {
             await cache.put(downloadPath, responseToCache);
             console.log(`Cached ${downloadPath} for future use`);
+            }
+            catch (error) {
+              console.error('Cache put error: ', error);
+            }
         }
        
       } else {
@@ -263,6 +279,11 @@ async function extractTarToFilesystem(tarPath: string, basePath: string = '/work
   
   if (typeof untar !== 'function') {
     throw new Error('untar is not a function. Module structure: ' + JSON.stringify(Object.keys(jsUntarModule)));
+  }
+
+  if (subDirectory) {
+    (mujoco as any).FS.mkdir(`${basePath}/${subDirectory}`);
+    basePath = `${basePath}/${subDirectory}`;
   }
 
   let skipFiles = new Set([
@@ -363,6 +384,7 @@ class MujocoApp {
     mjvScene: any;
   
     paused = false;
+    playing = false;
     frameId: number|null = null;
     maxGeoms: number = 2 ** 15;
   
@@ -382,6 +404,14 @@ class MujocoApp {
   
     sceneXmlString: string;
 
+    actionJson: any;
+
+    changeFired: boolean = false;
+    changeFiredLastUpdate: boolean = false;
+
+    // Parameters from placing the robot and camera computed from `actionJson`
+    robotInitParameters: any;
+
 constructor() {
     this.mjvPerturb = new mujoco.MjvPerturb();
     this.mjvOption = new mujoco.MjvOption();
@@ -394,13 +424,22 @@ constructor() {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(this.renderer.domElement);
+    this.renderer.domElement.id = "mujoco-canvas"
+    
 
     this.camera = new THREE.PerspectiveCamera(
         45, window.innerWidth / window.innerHeight, .1, 1000);
     this.camera.up.set(0, 0, 1);
+    // this.camera.position.set(-2, 0, 2);
     this.camera.position.set(-2, 0, 2);
 
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+      this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+      // Don't auto-rotate or reset the camera - we'll set it manually
+      this.controls.autoRotate = false;
+      this.controls.minDistance = 0.1;
+      // this.controls.maxDistance = 7.0;
+      // this.controls.enableDamping = true;
+      this.controls.dampingFactor = 0.05;
   }
 
   dispose() {
@@ -609,10 +648,130 @@ constructor() {
           console.error('Error parsing XML for material-texture mapping:', e);
         }
       }
+
   
-    initScene() {
+    // Get the forward direction vector of a body from its rotation matrix.
+  getBodyForwardDirection(bodyId: number): THREE.Vector3 {
+    if (!this.mjModel || !this.mjData || bodyId < 0 || bodyId >= this.mjModel.nbody) {
+      console.warn(`Invalid body ID: ${bodyId}`);
+      return new THREE.Vector3(1, 0, 0); // Default forward
+    }
+
+    // xmat is stored in column-major order: 9 elements per body (3x3 matrix)
+    // for body i: matrix starts at index i * 9, 
+    const matIdx = bodyId * 9;
+    const xmat = this.mjData.xmat;
+    
+    return new THREE.Vector3(
+      xmat[matIdx + 0],  // X component of forward direction
+      xmat[matIdx + 3],  // Y component of forward direction
+      xmat[matIdx + 6]   // Z component of forward direction
+    );
+  }
+
+  getBodyDirection(bodyId: number, bodyAxis: BodyAxis): THREE.Vector3 {
+    if (!this.mjModel || !this.mjData || bodyId < 0 || bodyId >= this.mjModel.nbody) {
+      console.warn(`Invalid body ID: ${bodyId}`);
+      return new THREE.Vector3(1, 0, 0); // Default forward
+    }
+
+    // column mayor
+    // 
+    // [0:x.x,  1:y.x, 2: z.x]
+    // [3:x.y,  4:y.y, 5: z.y]
+    // [6:x.z,  7:y.z, 8: z.z]
+
+    let indices: number[] = [0, 3, 6];
+    let sign = 1.0;
+    if (bodyAxis == BodyAxis.forward) {
+        indices = [0, 3, 6];
+    }
+    else if(bodyAxis == BodyAxis.back) {
+        indices = [0, 3, 6];
+        sign = -1.0;
+    }
+    else if(bodyAxis == BodyAxis.right) {
+        indices = [2, 5, 8];
+        sign = 1.0;
+    }
+    else if(bodyAxis == BodyAxis.left) {
+        indices = [2, 5, 8];
+        sign = -1.0;
+    }
+    const matIdx = bodyId * 9;
+    const xmat = this.mjData.xmat;
+    
+    return new THREE.Vector3(
+      sign * xmat[matIdx + indices[0]],  // X component of forward direction
+      sign * xmat[matIdx + indices[1]],  // Y component of forward direction
+      sign * xmat[matIdx + indices[2]]   // Z component of forward direction
+    );
+  }
+
+   placeRobot(mocap_id: number, robotPos: any, robotRot: any, updateSimulation: boolean = true) {
+        // let robotBaseBodyId = mujoco.mj_name2id(
+        //     this.mjModel,
+        //     mujoco.mjtObj.mjOBJ_BODY.value,
+        //     "robot_0/base"
+        // )
+        
+        // let mocap_id = this.mjModel.body_mocapid[robotBaseBodyId];
+
+        if (mocap_id >= 0) {
+
+        const posIdx = mocap_id * 3;
+        this.mjData.mocap_pos[posIdx + 0] = robotPos.x;
+        this.mjData.mocap_pos[posIdx + 1] = robotPos.y;
+        this.mjData.mocap_pos[posIdx + 2] = robotPos.z;
+        
+
+        const quatIdx = mocap_id * 4;
+        this.mjData.mocap_quat[quatIdx + 0] = robotRot.w;  
+        this.mjData.mocap_quat[quatIdx + 1] = robotRot.x;                 
+        this.mjData.mocap_quat[quatIdx + 2] = robotRot.y;                 
+        this.mjData.mocap_quat[quatIdx + 3] = robotRot.z; 
+        
+        if(updateSimulation) {
+        mujoco.mj_forward(this.mjModel, this.mjData);
+        }
+
+    }
+    }
+
+    seRobotInitParameters(robotInitParameters: any) {
+      this.robotInitParameters = robotInitParameters;
+    }
+
+
+  
+    async initScene() {
       this.mjvScene = new mujoco.MjvScene(this.mjModel, this.maxGeoms);
-  
+
+      
+      
+      // ===== CHANGE THIS TO TRACK DIFFERENT ROBOT PARTS =====
+      // Can track either a BODY or a JOINT
+    //   const TARGET_JOINT_NAME = "robot_0/gripper/right_spring_link_joint";  // Track a joint
+    // const targetJoint = this.robotInitParameters.cameraTargetJoint;
+    // const TARGET_JOINT_NAME = targetJoint ? targetJoint : "robot_0/fr3_joint4";
+
+    let cameraTargetJointName = this.robotInitParameters.cameraTargetJoint;
+    let noCameraTargetObject = false;
+    if (!this.robotInitParameters.cameraTargetJoint && !this.robotInitParameters.cameraTargetBody) {
+      // Set default target joint 
+      noCameraTargetObject = true;
+      cameraTargetJointName = "robot_0/fr3_joint4";
+    }
+    let skipAutoCameraSetup = false;
+    if (noCameraTargetObject && this.robotInitParameters.cameraTarget && this.robotInitParameters.initialCameraPos) {
+      skipAutoCameraSetup = true;
+    }
+
+      // const TARGET_BODY_NAME = "robot_0/gripper/base";  // Or track a body
+      // Options for joints: "robot_0/fr3_joint1" through "robot_0/fr3_joint7", etc.
+      // Options for bodies: "robot_0/base", "robot_0/gripper/base", "robot_0/gripper/left_driver", etc.
+      // ========================================================
+
       // const pointLight = new THREE.PointLight(0xffffff, .4);
       // pointLight.position.set(0, 0, 2);
       // pointLight.castShadow = true;
@@ -630,6 +789,235 @@ constructor() {
       // this.scene.add(spotLight);
       // this.scene.add(spotLight.target);
       this.createLightsFromModel();
+      this.update();
+
+      let robotMocapBodyName =  this.robotInitParameters.bodyBaseName;
+
+      let robotBaseBodyId = mujoco.mj_name2id(
+        this.mjModel,
+        mujoco.mjtObj.mjOBJ_BODY.value,
+        robotMocapBodyName
+    )
+    
+    let mocap_id = this.mjModel.body_mocapid[robotBaseBodyId];
+
+    let robotPos = this.robotInitParameters.robotPos;
+    let robotRot = this.robotInitParameters.robotRot;
+
+    // Where the camera should be placed with respect to the target body
+    let targetBodyDirection = this.robotInitParameters.bodyDirectionForCamera;
+
+    // distance the camera should be from tracked object
+    let cameraDistance = this.robotInitParameters.cameraDistance;
+    // extra elevation in up axis camera will be placed
+    let cameraElevation = this.robotInitParameters.cameraElevation;
+    // extra rotation around target object using up as rotation axis
+    const rotateOffsetYDegrees = this.robotInitParameters.cameraRotateYOffsetDegrees;
+
+    const rotateOffsetZDegrees = this.robotInitParameters.cameraRotateZOffsetDegrees;
+
+    this.placeRobot(mocap_id, robotPos, robotRot, true);
+
+    let targetJointId: number = -1;  
+    let targetBodyId: number = -1;  
+
+    if (mocap_id >= 0) {
+      
+      let target_p: THREE.Vector3;
+      let targetName: string;
+     
+    
+      
+      if (targetBodyId) {
+        targetJointId = mujoco.mj_name2id(
+          this.mjModel,
+          mujoco.mjtObj.mjOBJ_JOINT.value,
+          cameraTargetJointName
+        );
+        targetName = cameraTargetJointName;
+        console.log(`------ found joint: ${cameraTargetJointName} if: ${targetJointId}`);
+        
+        const jointAnchorIdx = targetJointId * 3;
+        target_p = new THREE.Vector3(
+          this.mjData.xanchor[jointAnchorIdx + 0],
+          this.mjData.xanchor[jointAnchorIdx + 1],
+          this.mjData.xanchor[jointAnchorIdx + 2],
+        );
+        console.log(`------ joint anchor position: ${vecToStr(target_p)}`);
+        
+        // body of joint
+        const jointBodyId = this.mjModel.jnt_bodyid[targetJointId];
+        console.log(`------ joint ${cameraTargetJointName} belongs to body id: ${jointBodyId}`);
+        
+        
+        // also get joint axis direction as alternative
+        const jointAxisIdx = targetJointId * 3;
+        const jointAxis = new THREE.Vector3(
+          this.mjData.xaxis[jointAxisIdx + 0],
+          this.mjData.xaxis[jointAxisIdx + 1],
+          this.mjData.xaxis[jointAxisIdx + 2],
+        );
+        console.log(`------ Joint axis direction: ${vecToStr(jointAxis)}`);
+    }
+    else {
+
+      console.log(`---------- using target body ${this.robotInitParameters.targetBody}`);
+
+      targetBodyId = mujoco.mj_name2id(
+        this.mjModel,
+        mujoco.mjtObj.mjOBJ_BODY.value,
+        this.robotInitParameters.targetBody
+      );
+    }
+
+      
+    // }
+      
+      
+      // Also get base position for comparison
+      const baseXposIdx = robotBaseBodyId * 3;
+      const base_p = new THREE.Vector3(
+        this.mjData.xpos[baseXposIdx + 0],
+        this.mjData.xpos[baseXposIdx + 1],
+        this.mjData.xpos[baseXposIdx + 2],
+      );
+     
+      
+    } else {
+      console.warn(`------ robot_0/base does not have a valid mocap_id (got ${mocap_id})`);
+      throw new Error("Invalid robot base to teleport and track: ${")
+    }
+
+      this.render();
+      
+      await this.createThreeJSResources(this.mjvScene);
+      
+      // update the scene to ensure positions are current, robort is teleported
+      mujoco.mjv_updateScene(
+        this.mjModel, this.mjData, this.mjvOption, this.mjvPerturb,
+        this.mjvCamera, mujoco.mjtCatBit.mjCAT_ALL.value, this.mjvScene);
+      
+      let target_p_updated: THREE.Vector3;
+      let forwardDir: THREE.Vector3;
+      
+      if (targetJointId >= 0) {
+
+        const jointAnchorIdx = targetJointId * 3;
+        target_p_updated = new THREE.Vector3(
+          this.mjData.xanchor[jointAnchorIdx + 0],
+          this.mjData.xanchor[jointAnchorIdx + 1],
+          this.mjData.xanchor[jointAnchorIdx + 2],
+        );
+
+        // get body forward
+        const jointBodyId = this.mjModel.jnt_bodyid[targetJointId];
+        // forwardDir = this.getBodyForwardDirection(jointBodyId);
+
+        forwardDir = this.getBodyDirection(jointBodyId, targetBodyDirection)
+        
+        console.log(`------ using joint anchor position as target: ${vecToStr(target_p_updated)} joint body ID: ${jointBodyId}`);
+      } else if (targetBodyId >= 0) {
+
+        // TODO: Remove this? this branch doesn't hit
+        const targetXposIdxUpdated = targetBodyId * 3;
+        target_p_updated = new THREE.Vector3(
+          this.mjData.xpos[targetXposIdxUpdated + 0],
+          this.mjData.xpos[targetXposIdxUpdated + 1],
+          this.mjData.xpos[targetXposIdxUpdated + 2],
+        );
+        // forwardDir = this.getBodyForwardDirection(targetBodyId);
+        forwardDir = this.getBodyDirection(targetBodyId, targetBodyDirection)
+        console.log(`------ using body position as target: ${vecToStr(target_p_updated)}`);
+      }
+      
+      const forwardNorm = forwardDir.clone().normalize();
+      
+      // camera position should be away from forward `cameraDistance` away and `cameraElevation`
+      const upVector = new THREE.Vector3(0, 0, 1);
+      const cameraOffset = forwardNorm.clone().multiplyScalar(cameraDistance)
+        .add(upVector.clone().multiplyScalar(cameraElevation));
+      
+      // rotate the camera offset around the up axis rotateOffsetDegrees
+      const rotationAxis = new THREE.Vector3(0, 0, 1); // Z is up
+      const rotationQuaternion = new THREE.Quaternion();
+      const rotationQuaternionZ = new THREE.Quaternion();
+      rotationQuaternion.setFromAxisAngle(rotationAxis, (Math.PI / 180) * rotateOffsetYDegrees);
+      rotationQuaternionZ.setFromAxisAngle(new THREE.Vector3(0, 1, 0), (Math.PI / 180) * rotateOffsetZDegrees);
+
+      rotationQuaternion.multiply(rotationQuaternionZ);
+      cameraOffset.applyQuaternion(rotationQuaternion);
+      
+      // calculate final camera position: target position + rotated offset
+      const cameraPos = target_p_updated.clone().add(cameraOffset);
+      
+      this.camera.position.set(cameraPos.x, cameraPos.y, cameraPos.z);
+      this.camera.up.set(0, 0, 1);
+      this.camera.lookAt(target_p_updated);
+      
+      // IMPPORTANT: nothing works if we don't set orbit controls target orbit
+      this.controls.target.copy(target_p_updated);
+      // this.controls.enablePan = false;
+    //   this.controls.autoRotate = true;
+      this.controls.update();
+      
+      console.log(`------- camera repositioned to look at target (${cameraTargetJointName}) at: ${vecToStr(target_p_updated)}`);
+      console.log(`------- camera position: ${vecToStr(cameraPos)}`);
+      console.log(`------- OrbitControls target: ${vecToStr(this.controls.target)}`);
+      
+      // verify camera is actually looking at target
+      // const verifyDirection = target_p_updated.clone().sub(cameraPos).normalize();
+      // const cameraDir = new THREE.Vector3();
+      // this.camera.getWorldDirection(cameraDir);
+      // console.log(`------ camera should look: ${vecToStr(verifyDirection)}`);
+      // console.log(`------ camera actually looking: ${vecToStr(cameraDir)}`);
+      // console.log(`------ clignment (dot product, should be ~1): ${cameraDir.dot(verifyDirection).toFixed(4)}`);
+      app.update()
+      app.render()
+
+
+      
+
+      Object.entries(this.actionJson["init_qpos"]).forEach(([key, value], index) => {
+        // console.log(`-------- init_qpos_index ${index}`)
+        if (key === "gripper") {
+          // TODO figure out gripper stuff
+          app.mjData.ctrl[7] = value[0];
+        }
+        else {
+          let jointId = mujoco.mj_name2id(
+            this.mjModel,
+            mujoco.mjtObj.mjOBJ_JOINT.value,
+            key
+          );
+          let qposadr = this.mjModel.jnt_qposadr[jointId]
+
+          let dofadr = this.mjModel.jnt_dofadr[jointId]
+          app.mjData.qvel[dofadr] = 0.0
+          app.mjData.qpos[qposadr] = value;
+        }
+     });
+    //  let firstAction = null;
+    //  let index = 0;
+    //  while (!firstAction || Object.keys(firstAction).length === 0) {
+    //   firstAction = this.actionJson["commanded_action"][index];
+    //   index++;
+    //  }
+
+    if (this.robotInitParameters.initialCameraPos) {
+      this.camera.position.set(this.robotInitParameters.initialCameraPos.x, this.robotInitParameters.initialCameraPos.y, this.robotInitParameters.initialCameraPos.z);
+    }
+    if (this.robotInitParameters.cameraTarget) {
+      this.controls.target.set(this.robotInitParameters.cameraTarget.x, this.robotInitParameters.cameraTarget.y, this.robotInitParameters.cameraTarget.z);
+    }
+     let controlsInit = this.getFirstValidAction();
+     console.log(`----- controls ${controlsInit}`)
+
+     this.setControls(controlsInit);
+     app.update()
+     app.render()
+     
+      
+
     }
 
   async loadModel(xmlPath: string) {
@@ -661,7 +1049,7 @@ constructor() {
       }
     }
 
-    this.initScene();
+    await this.initScene();
   }
 
 
@@ -1303,13 +1691,16 @@ constructor() {
             this.meshes.push(mesh);
             this.scene.add(mesh);
 
+            mjvGeom.delete();
+
         }
         else {
             console.error(`Undefined geom ${i}`);
         }
-        }
+        
+    }
 
-
+   geoms.delete();
   }
 
   discoverTextureFiles(): string[] {
@@ -1390,6 +1781,14 @@ constructor() {
     this.mjvScene.delete();
   }
 
+  playButton() {
+    this.playing = !this.playing;
+    const button = document.getElementById('play-button');
+    if (button) {
+      button.textContent = this.paused ? 'Play Action' : 'Pause Action';
+    }
+  }
+
   pauseButton() {
     this.paused = !this.paused;
     const button = document.getElementById('pause-button');
@@ -1400,7 +1799,7 @@ constructor() {
 
   // TODO(matijak): Fix the bug where contact cylinders are wrong if the
   // simulation is reset while they are being visualized
-  resetButton() {
+  async resetButton() {
     if (this.mjModel && this.mjData) {
       console.log('Resetting model and data');
 
@@ -1408,11 +1807,11 @@ constructor() {
       mujoco.mj_forward(this.mjModel, this.mjData);
 
       this.clearScene();
-      this.initScene();
+      await this.initScene();
     }
   }
 
-  contactButton() {
+  async contactButton() {
     const index = mujoco.mjtVisFlag.mjVIS_CONTACTPOINT.value;
     const value = this.mjvOption.flags[index];
     this.mjvOption.flags[index] = !value;
@@ -1424,20 +1823,158 @@ constructor() {
     }
 
     this.clearScene();
-    this.initScene();
+    await this.initScene();
   }
+
+  setControls(action: any) {
+
+    for (let i = 0; i < app.mjData.ctrl.length; i++) {
+      let ctrlArray;
+      let dataIndex = i;
+      if (i < 7 ) {
+        ctrlArray = action["arm"];
+      }
+      else {
+        dataIndex = 0;
+        ctrlArray = action["gripper"];
+      }
+      app.mjData.ctrl[i] = ctrlArray[dataIndex];
+     }
+
+  }
+
+  getFirstValidAction() { 
+    let index = 0;
+     let firstAction = null;
+     while ((!firstAction || Object.keys(firstAction).length === 0)  && index < this.actionJson["commanded_action"].length) {
+      firstAction = this.actionJson["commanded_action"][index];
+      index++;
+     }
+     return firstAction;
+  }
+
+  playActions() {
+    if (!this.playing) {
+      this.playing = true;
+      this.actionIndex = 0;
+      this.secondsSinceLastAction = 0.0;
+    }
+    else {
+      this.playing = false;
+      this.actionIndex = 0;
+      this.secondsSinceLastAction = 0.0;
+
+      // init pos again
+      
+      Object.entries(this.actionJson["init_qpos"]).forEach(([key, value], index) => {
+        
+        if (key === "gripper") {
+          // TODO figure out gripper stuff
+          // app.mjData.ctrl[7] = value[0];
+        }
+        else {
+          let jointId = mujoco.mj_name2id(
+            this.mjModel,
+            mujoco.mjtObj.mjOBJ_JOINT.value,
+            key
+          );
+          let qposadr = this.mjModel.jnt_qposadr[jointId]
+          app.mjData.qpos[qposadr] = value;
+        }
+     });
+
+     let controlsInit = this.getFirstValidAction();
+     
+     this.setControls(controlsInit);
+  }
+}
+  actionIndex: number = 0;
+  updateCtrlDir: number = 1.0;
+  secondsSinceLastAction: number = 0.0;
+  timeStampSecondsAtLastCanvasClick: number = 0.0;
+  inactiveClickTimeoutId: number = -1;
+
+  numberOfNoChangeFired: number = 0;
+
 
   update() {
       if (!this.mjModel || !this.mjData) {
         return;
       }
-  
+
+      let actionPeriodSeconds = this.actionJson["policy_dt_ms"]/1000;
+      
+      // this.changeFiredLastUpdate = this.changeFired;
+      // this.changeFired = false;
+      
       this.controls.update();
+      // const eps = 0.00008;
+      // if (Math.abs(app.controls._sphericalDelta.theta) > eps && Math.abs(app.controls._sphericalDelta.theta) > eps) {
+      //   // console.log(`----- theta ${app.controls._sphericalDelta.theta} phi ${app.controls._sphericalDelta.theta}`);
+      // }
+      
+      
+      // TODO logic to detect when movement has stopped when damping is enabled
+      // if (this.changeFiredLastUpdate && !this.changeFired) {
+      //   this.numberOfNoChangeFired = 1;
+      //   console.log("--------- change last frame");
+
+      // }
+      // else {
+      //   if (!this.changeFired) {
+      //     this.numberOfNoChangeFired++;
+      //     console.log(`--------- numberOfNoChangeFired ${this.numberOfNoChangeFired}`);
+      //   }
+      // }
+      
   
       if (!this.paused) {
         let sim_start = this.mjData.time;
+        let last_update_time = sim_start;
+        
         while (this.mjData.time - sim_start < 1. / 60.) {
-          mujoco.mj_step(this.mjModel, this.mjData);
+        // while (this.mjData.time - sim_start < 1. / 60.) {
+          let deltaTimeSeconds = this.mjData.time - last_update_time
+          // console.log(`------- delta ${deltaTime}`);
+          
+          // let deltaTime = this.mjData.time - sim_start;
+
+          // console.log(deltaTime);
+
+          if (this.playing) {
+
+            if (this.secondsSinceLastAction >= actionPeriodSeconds) {
+              
+              if (this.actionIndex < this.actionJson["commanded_action"].length) {
+                let action = this.actionJson["commanded_action"][this.actionIndex];
+                this.actionIndex++;
+                if (action && Object.keys(action).length > 0) {
+                  this.setControls(action);
+                  this.secondsSinceLastAction = 0.0
+                }
+                
+
+              }
+            }
+            else {
+              this.secondsSinceLastAction += deltaTimeSeconds;
+            }
+          }
+          
+          // this.actionJson
+          // app.mjData.ctrl[6] += 0.0001;
+          // app.mjData.ctrl[7] += 0.1;
+          //   if (this.updateCtrlDir > 0 && app.mjData.ctrl[5] >= 3.0) {
+          //   this.updateCtrlDir = -1.0;
+          //   }
+          //   else if (this.updateCtrlDir < 0 && app.mjData.ctrl[5] < 0.01) {
+          //   this.updateCtrlDir = 1.0;
+          //   }
+          //   app.mjData.ctrl[5] += this.updateCtrlDir * 0.001;
+
+            last_update_time = this.mjData.time;
+            mujoco.mj_step(app.mjModel, app.mjData);
+            
         }
       }
   
@@ -1463,11 +2000,11 @@ constructor() {
                 0, 0, 0, 1);
             mesh.matrixWorldNeedsUpdate = true;
     
-            // mjvGeom.delete();
+             mjvGeom.delete();
         }
       }
   
-    //   geoms.delete();
+       geoms.delete();
     }
   
     render() {
@@ -1549,8 +2086,79 @@ constructor() {
       });
     }
   }
+
+  setMujocoActions(actionJson: any) {
+    this.actionJson = actionJson;
+
+    // let robotInitParameters= {
+    //   bodyBaseName: "robot_0/base",
+    //   robotPos: {
+    //     x: -0.8417830467224121,
+    //     y: -0.6631886959075928,
+    //     z: 0.3122207224369049
+    //   },
+    //   robotRot: {
+    //     w: 0.9883546233177185,
+    //     x: 0.0,
+    //     y: 0.0,
+    //     z: -0.15216828882694244
+    //   },
+
+    //   bodyDirectionForCamera: BodyAxis.forward,
+
+    //   cameraDistance: 1.6,
+    //   cameraElevation: 0.0,
+    //   cameraRotateYOffsetDegrees: 60
+
+
+    // }
+    let robotInitParameters= actionJson["robotParams"];
+    if (actionJson["robot_base_pose"].length > 0) {
+      let initPos = actionJson["robot_base_pose"][0];
+
+        if (initPos.length == 7) {
+          robotInitParameters["robotPos"] = {
+                x: initPos[0],
+                y: initPos[1],
+                z: initPos[2] 
+              };
+
+              robotInitParameters["robotRot"] = {
+                w: initPos[3],
+                x: initPos[4],
+                y: initPos[5],
+                z: initPos[6]
+              };
+        }
+        else {
+          throw new Error(`"robot_base_pose[0]: has to be an array of length 7 with numbers, that are position and rotation of robot`);
+        }
+    }
+    else {
+      throw new Error(`"robot_base_pose: in "actionJson" must have at least one position to initialize the robot to`);
+    }
+
+    
+    
+    app.seRobotInitParameters(robotInitParameters);
+  }
   
 }
+
+// function onClick(e) {
+//   var element = canvasE;
+//   var offsetX = 0, offsetY = 0
+
+//       if (element.offsetParent) {
+//     do {
+//       offsetX += element.offsetLeft;
+//       offsetY += element.offsetTop;
+//     } while ((element = element.offsetParent));
+//   }
+
+//   x = e.pageX - offsetX;
+//   y = e.pageY - offsetY;
+// }
 
 function setupWindowEvents() {
     window.addEventListener('unload', () => {
@@ -1646,6 +2254,43 @@ function printAllFiles() {
       app = new MujocoApp();
   
       setupWindowEvents();
+
+     let actionJsonRaw = await fetch("actions/traj_0_extracted_data.json");
+     console.log("-----raw actions");
+     let actionJson = await actionJsonRaw.json();
+     console.log(actionJson)
+
+
+    
+
+     
+    app.setMujocoActions(actionJson);
+
+    // console.log(`----- theta ${app.controls._sphericalDelta.theta}`);
+
+    // app.controls.addEventListener( 'change', (e) => {
+    //   // console.log(`---- change camera event ${e}`)
+    //   // console.log(`----- theta ${app.controls._sphericalDelta.theta} phi ${app.controls._sphericalDelta.theta}`);
+
+    //   // const _EPS = 0.000001;
+    //   console.log("change");
+    //   app.changeFired = true;
+    //   // if ( 
+    //   //   app.controls._lastPosition.distanceToSquared( app.controls.object.position ) > _EPS ||
+    //   //   8 * ( 1 - app.controls._lastQuaternion.dot( app.controls.object.quaternion ) ) > _EPS ||
+    //   //   app.controls._lastTargetPosition.distanceToSquared( app.controls.target ) > _EPS ) {
+
+    //   //     console.log("---------- event fired")
+
+    //   //   }
+    // } );
+
+    // app.controls.addEventListener( 'end', (e) => {
+    //   console.log(`---- end camera event ${e}`)
+
+    // } );
+
+      let  lastCameraPositon: THREE.Vector3 = app.camera.position.clone();
   
       const pauseButtonElement = document.getElementById('pause-button');
       if (pauseButtonElement) {
@@ -1653,12 +2298,109 @@ function printAllFiles() {
       }
       const resetButtonElement = document.getElementById('reset-button');
       if (resetButtonElement) {
+        
         resetButtonElement.onclick = () => app.resetButton();
+        lastCameraPositon = app.camera.position.clone();
       }
       const contactButtonElement = document.getElementById('contact-button');
       if (contactButtonElement) {
         contactButtonElement.onclick = () => app.contactButton();
       }
+
+      const playButtonElement = document.getElementById('play-button');
+      if (playButtonElement) {
+        playButtonElement.onclick = () => app.playActions();
+      }
+
+      const printCameraButtonE = document.getElementById('print-camera');
+      if (printCameraButtonE) {
+        printCameraButtonE.onclick = () => {
+          console.log(`------- camera position: ${vecToStr(app.camera.position)}`);
+          console.log(`------- OrbitControls target: ${vecToStr(app.controls.target)}`);
+      
+        };
+      }
+
+      let canvasElement = document.getElementById('mujoco-canvas');
+
+      let maxInactiveTimeSecondsToAutoRotate = 16;
+      
+      if (canvasElement) {
+
+        let cameraStoreTimeoutId = -1; 
+        let restoreCamera = false;
+        let rostoreToLastUserCameraPos = true;
+        
+        let handleMouseInteract = (e, createInactiveTimeout) => {
+          
+          // if (app.inactiveClickTimeoutId) {}
+          let clockwise = Math.random() < 0.5;
+          app.controls.autoRotate = false;
+          app.controls.autoRotateSpeed = clockwise ? 2 : -2;
+          // app.camera.position.set(lastCameraPositon.x, lastCameraPositon.y, lastCameraPositon.z);
+          // console.log(`---- camera pos now: ${vecToStr(app.camera.position)}, last cam pos ${vecToStr(lastCameraPositon)}`);
+
+          clearTimeout(app.inactiveClickTimeoutId);
+          app.inactiveClickTimeoutId = -1;
+          if (createInactiveTimeout) {
+            
+            app.inactiveClickTimeoutId = setTimeout(() => {
+              lastCameraPositon = app.camera.position.clone();
+              app.controls.autoRotate = true;
+            }, maxInactiveTimeSecondsToAutoRotate*1000);
+          }
+        
+        }
+
+        canvasElement.addEventListener("mousedown", (e) => {
+            // console.log("------- 'mousedown'");
+            if (app.inactiveClickTimeoutId > -1 && restoreCamera && rostoreToLastUserCameraPos) {
+              // let userDistanceWhileRotated =  app.controls.target.clone().sub(app.camera.position).length();
+              app.camera.position.set(lastCameraPositon.x, lastCameraPositon.y, lastCameraPositon.z);
+
+              // Uncomment if we want to add the extra zoom user did while autorotating
+              // let targetToLastCameraPos = app.controls.target.clone().sub(lastCameraPositon);
+              // let extraUserDist =  targetToLastCameraPos.length() - userDistanceWhileRotated;
+
+              // let dir = targetToLastCameraPos.normalize();
+              // let finalPos = dir.multiplyScalar(extraUserDist).add(lastCameraPositon);
+              // app.camera.position.set(finalPos.x, finalPos.y, finalPos.z);
+              
+            }
+            handleMouseInteract(e, false);
+            
+          });
+
+          canvasElement.addEventListener("mouseup", (e) => {
+            // console.log("------- 'mouseup'");
+            if (rostoreToLastUserCameraPos) {
+              clearTimeout(cameraStoreTimeoutId);
+              restoreCamera = false;
+              cameraStoreTimeoutId = setTimeout(() => {
+                lastCameraPositon = app.camera.position.clone();
+                restoreCamera = true;
+              }, 3000);
+            }
+            
+            handleMouseInteract(e, true);
+            
+          });
+
+        // canvasElement.addEventListener("wheel", (e) => {
+        //     handleMouseInteract(e);
+        // });
+
+          // canvasElement.addEventListener("mousedown", (e) => {
+          //   console.log("------- 'mousedown mouseup'");
+          //   app.controls.autoRotate = false;
+          // });
+        //   canvasElement.addEventListener("click", (e) => {
+        //     console.log("------- click event");
+        //     handleMouseInteract(e);
+          
+        // });
+      }
+
   
       const tarFileName = tarPath;
      
@@ -1764,14 +2506,11 @@ function printAllFiles() {
       }
       app.sceneXmlString = (mujoco as any).FS.readFile(`/working/${xmlFileName}`, { encoding: 'utf8' });
   
-  
+      
+      // Calls init scene
       await app.loadModel(`/working/${xmlFileName}`);
 
-      app.update();
-
-      app.render();
       
-      await app.createThreeJSResources(app.mjvScene);
       app.run();
   
     } catch (error) {
@@ -1800,4 +2539,19 @@ function printAllFiles() {
 
 //   main("scenes/ithor-bundled_small.tar", "FloorPlan1_physics.xml");
 
-main("scenes/ithor-bundled-all.tar", "FloorPlan1_physics_with_robot.xml");
+// main("scenes/ithor-bundled-all_2.tar", "FloorPlan1_physics_with_robot.xml");
+
+//main("scenes/ithor-bundled-small_w_robot.tar", "FloorPlan1_physics_with_robot.xml", "robots/franka_droid_small.tar", "model.xml");
+
+main("scenes/ithor-bundled-small_w_robot.tar", "FloorPlan1_physics_with_robot.xml", "robots/franka_droid_small.tar", "model.xml");
+
+
+
+
+// main("scenes/procthor_objaverse_817_fix.tar", "train_817_with_robot.xml", "robots/franka_droid_small.tar", "model.xml");
+
+// main("scenes/procthor_objaverse_817_fix2.tar", "train_817_with_robot.xml", "robots/franka_droid_small.tar", "model.xml");
+
+// main("scenes/ithor-bundled-small_w_robot_no_ceil.tar", "FloorPlan1_physics_with_robot_no_ceiling.xml", "robots/franka_droid_small.tar", "model.xml");
+
+// main("scenes/ithor-bundled-small_w_robot.tar", "FloorPlan1_physics_with_robot.xml")
