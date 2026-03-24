@@ -28,14 +28,36 @@
         display: flex;
         gap: 10px;
       }
+
+      #header-container {
+        position: fixed;
+        top: 20px;
+        right: 5%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 10px;
+        z-index: 9999;
+      }
     </style>
   </head>
   <body>
-    <script type="module" src="./app.ts"></script>
+
+    <div id="header-container">
+      <button id="toggle-view">Toggle View</button>
+    </div>
+
+    <div id="canvas-container">
+      <div id="overlay-container"></div>
+
+    </div>
+    <script type="module" src="./test/app_clean.ts"></script>
+    
     <div id="button-container">
+      <button id="left-button"><</button>
       <button id="pause-button">Pause</button>
       <button id="reset-button">Reset</button>
       <button id="contact-button">Show Contacts</button>
+      <button id="right-button">></button>
     </div>
   </body>
 </html>

@@ -1,0 +1,54 @@
+[
+  {
+    "slug": "holodeck_46758",
+    "name": "MSMultiType Office",
+    "thumbnailUrl": "/scene_cards_media/holodeck_46758.webp",
+    "videoUrl": "/scene_cards_media/holodeck_46758.webm",
+    "description": "",
+    "featured": true,
+    "actionsJsonFile": "holodeck_46758_actions.json",
+    "sceneXmlName": "train_46758_with_robot.xml"
+  },
+  {
+    "slug": "ithor_1",
+    "name": "MSCrafted Kitchen",
+    "thumbnailUrl": "/scene_cards_media/ithor_1.webp",
+    "videoUrl": "/scene_cards_media/ithor_1.webm",
+    "description": "",
+    "featured": true,
+    "actionsJsonFile": "ithor_1_actions.json",
+    "sceneXmlName": "FloorPlan1_physics_with_robot_no_ceiling.xml"
+  },
+  {
+    "slug": "holodeck_8158",
+    "name": "MSMultiType School",
+    "thumbnailUrl": "/scene_cards_media/holodeck_8158.webp",
+    "videoUrl": "/scene_cards_media/holodeck_8158.webm",
+    "description": "",
+    "featured": true,
+    "actionsJsonFile": "holodeck_8158_actions.json",
+    "sceneXmlName": "train_8158_with_robot.xml"
+  },
+  {
+    "slug": "holodeck_52389",
+    "name": "MSMultiType Arcade",
+    "thumbnailUrl": "/scene_cards_media/holodeck_52389.webp",
+    "videoUrl": "/scene_cards_media/holodeck_52389.webm",
+    "description": "",
+    "featured": true,
+    "actionsJsonFile": "holodeck_52389_actions.json",
+    "sceneXmlName": "train_52389_with_robot.xml"
+  },
+  
+  
+  {
+    "slug": "procthor_objaverse_105",
+    "name": "MSProcObja House",
+    "thumbnailUrl": "/scene_cards_media/procthor_objaverse_105.webp",
+    "videoUrl": "/scene_cards_media/procthor_objaverse_105.webm",
+    "description": "",
+    "featured": true,
+    "actionsJsonFile": "procthor-objaverse_105_actions.json",
+    "sceneXmlName": "train_105_with_robot.xml"
+  }
+]
