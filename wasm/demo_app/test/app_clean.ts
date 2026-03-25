@@ -24,6 +24,7 @@ import type { CameraMode } from '../types/scene.types';
 import { CAMERA_CONFIG } from '../mujoco/cameraConfig';
 
 import {Renderer, WebGLRenderer} from "./renderer.js"
+import {WebGPURenderer} from "./webgpu_renderer.js"
 
 /** Viewport view config: normalized (0–1) left, top, width, height and camera params */
 export interface ViewConfig {
@@ -512,78 +513,93 @@ export class MujocoApp {
       1000
     );
 
-    // this.metaRenderer = new WebGLRenderer(
-    //   containerElementId,
-    //   canvasContainer,
-    //   this.scene,
-    //   this.camera
-    // );
-    this.renderer = new THREE.WebGLRenderer(options);
-    this.renderer.setPixelRatio(window.devicePixelRatio)
-    this.renderer.setSize(1, 1, false) // temp, real size set in onResize
+    this.metaRenderer = new WebGLRenderer(
+      containerElementId,
+      canvasContainer,
+      this.scene,
+      this.camera,
+      () => {
+        if (this.cameraMode === "top-down") {
+          this.centerCameraOnScene(this.cameraMode);
+        }
+        if (this.overlayCallback) {
+          this.overlayCallback(this.getObjectOverlays());
+        }
+      }
 
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.NoToneMapping;
-    this.renderer.autoClear = true;
-    
+    );
+
     this.canvasContainer = canvasContainer;
-  
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-
-    if (newCanvas) {
-      document.body.appendChild(this.renderer.domElement);
-      this.renderer.domElement.id = containerElementId;
-    }
+    this.controls = this.metaRenderer.getControls();
+    this.outlinePass = this.metaRenderer.getOutlinePass();
 
     
-
-    this.camera.up.set(0, 0, 1);
-    this.camera.position.set(-2, 0, 2);
-
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-
-    this.controls.autoRotate = false;
-    this.controls.minDistance = 0.1;
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.05;
-
-
-
-    // this.renderer.autoClear = false
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.0
-
-  this.composer = new EffectComposer(this.renderer);
-  this.composer.addPass(new RenderPass(this.scene, this.camera));
-
-  this.outlinePass = new OutlinePass(
-    new THREE.Vector2(1, 1), // tmp onResize will set it
-    this.scene,
-    this.camera
-  )
-
-    this.setOutlinePassIdle();
-
-    this.outlinePass.selectedObjects = [];
-
-    if (!this.recordingMode) {
-      this.composer.addPass(this.outlinePass);
-    }
-    this.renderer.toneMapping = THREE.NoToneMapping;
-    this.composer.addPass(new OutputPass());
-
-    this.onResize();
-
-    this.resizeObserver = new ResizeObserver(() => {
-      this.onResize();
-    });
-    this.resizeObserver.observe(this.canvasContainer);
 
     this.setCameraMode(cameraMode);
 
+    this.setOutlinePassIdle();
+  //   this.renderer = new THREE.WebGLRenderer(options);
+  //   this.renderer.setPixelRatio(window.devicePixelRatio)
+  //   this.renderer.setSize(1, 1, false) // temp, real size set in onResize
+
+  //   this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+  //   this.renderer.toneMapping = THREE.NoToneMapping;
+  //   this.renderer.autoClear = true;
+    
+  //   this.canvasContainer = canvasContainer;
+  
+  //   this.renderer.shadowMap.enabled = true;
+  //   this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+
+  //   if (newCanvas) {
+  //     document.body.appendChild(this.renderer.domElement);
+  //     this.renderer.domElement.id = containerElementId;
+  //   }
+
+  //   this.camera.up.set(0, 0, 1);
+  //   this.camera.position.set(-2, 0, 2);
+
+  //   this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+
+  //   this.controls.autoRotate = false;
+  //   this.controls.minDistance = 0.1;
+  //   this.controls.enableDamping = true;
+  //   this.controls.dampingFactor = 0.05;
+
+
+  //   // this.renderer.autoClear = false
+  //   this.renderer.outputColorSpace = THREE.SRGBColorSpace
+  //   this.renderer.toneMapping = THREE.ACESFilmicToneMapping
+  //   this.renderer.toneMappingExposure = 1.0
+
+  // this.composer = new EffectComposer(this.renderer);
+  // this.composer.addPass(new RenderPass(this.scene, this.camera));
+
+  // this.outlinePass = new OutlinePass(
+  //   new THREE.Vector2(1, 1), // tmp onResize will set it
+  //   this.scene,
+  //   this.camera
+  // )
+
+  //   this.setOutlinePassIdle();
+
+  //   this.outlinePass.selectedObjects = [];
+
+  //   if (!this.recordingMode) {
+  //     this.composer.addPass(this.outlinePass);
+  //   }
+  //   this.renderer.toneMapping = THREE.NoToneMapping;
+  //   this.composer.addPass(new OutputPass());
+
+  //   this.onResize();
+
+  //   this.resizeObserver = new ResizeObserver(() => {
+  //     this.onResize();
+  //   });
+  //   this.resizeObserver.observe(this.canvasContainer);
+
+  //   this.setCameraMode(cameraMode);
 
   }
 
@@ -901,7 +917,9 @@ export class MujocoApp {
     bbox.getCenter(center);
     bbox.getSize(size);
 
-    const aspect = this.renderer.domElement.clientWidth / this.renderer.domElement.clientHeight;
+    let renderer = this.metaRenderer.getRenderer();
+
+    const aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
 
     let viewSize = size.y;
     if (size.x / size.y > aspect) {
@@ -929,39 +947,41 @@ export class MujocoApp {
   }
 
   onResize() {
-    if (!this.canvasContainer) return;
+    this.metaRenderer.onResize();
+  }
+  //   if (!this.canvasContainer) return;
 
-    // console.log("--------- Resize")
+  //   // console.log("--------- Resize")
   
-    const width = this.canvasContainer.clientWidth;
-    const height = this.canvasContainer.clientHeight;
-    // const { width, height } = this.renderer.domElement.getBoundingClientRect();
+  //   const width = this.canvasContainer.clientWidth;
+  //   const height = this.canvasContainer.clientHeight;
+  //   // const { width, height } = this.renderer.domElement.getBoundingClientRect();
   
-    if (width === 0 || height === 0) return;
+  //   if (width === 0 || height === 0) return;
   
-    this.renderer.setSize(width, height, true);
-    // this.renderer.setSize(width, height, false)
-    this.composer.setSize(width, height)
-    this.outlinePass.setSize(width, height)
+  //   this.renderer.setSize(width, height, true);
+  //   // this.renderer.setSize(width, height, false)
+  //   this.composer.setSize(width, height)
+  //   this.outlinePass.setSize(width, height)
 
-    if (this.cameraMode === "top-down") {
-    this.centerCameraOnScene(this.cameraMode);
-    }
+  //   if (this.cameraMode === "top-down") {
+  //   this.centerCameraOnScene(this.cameraMode);
+  //   }
 
-    // this.hudCamera.aspect = width / height;
-    // this.hudCamera.updateProjectionMatrix();
-    if (this.overlayCallback) {
-      this.overlayCallback(this.getObjectOverlays());
-    }
+  //   // this.hudCamera.aspect = width / height;
+  //   // this.hudCamera.updateProjectionMatrix();
+  //   if (this.overlayCallback) {
+  //     this.overlayCallback(this.getObjectOverlays());
+  //   }
 
 
     
   
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
+  //   this.camera.aspect = width / height;
+  //   this.camera.updateProjectionMatrix();
   
-    this.render(); // redraw immediately
-  };
+  //   this.render(); // redraw immediately
+  // };
 
   centerCameraOnScene(mode?: CameraMode): void {
     if (this.meshes.length === 0) {
@@ -987,8 +1007,9 @@ export class MujocoApp {
 
       console.log(`================= Centering topdown cam at: ${vecToStr(sceneCenter)} extents: ${vecToStr(extents)}`);
 
-      const aspect = this.renderer.domElement.clientWidth /
-               this.renderer.domElement.clientHeight;
+      let renderer = this.metaRenderer.getRenderer();
+
+      const aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
       
       const vFOV = THREE.MathUtils.degToRad(this.camera.fov);
       let distanceH = (size.y / 2) / Math.tan(vFOV / 2);
@@ -3111,7 +3132,8 @@ export class MujocoApp {
       // this.controls.addEventListener( 'change', this.controlsChangeEvent);
 
       // let canvasElement = document.getElementById(canvasElementName);
-      let canvasElement = this.renderer.domElement;
+      let renderer = this.metaRenderer.getRenderer();
+      let canvasElement = renderer.domElement;
 
       console.log('----------- setInteractEvents canvasElement:');
       console.log(canvasElement);
@@ -3136,7 +3158,7 @@ export class MujocoApp {
             if (this.restoreCamera) {
 
               this.raycastWithPreviousMousePos = true;
-              const rect = this.renderer.domElement.getBoundingClientRect();
+              const rect = renderer.domElement.getBoundingClientRect();
       
               const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
               const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -3158,7 +3180,7 @@ export class MujocoApp {
             if (this.enableObjectSelect) {
               console.log(`---- mouseup ${e.clientX} ${e.clientY}`);
 
-              const rect = this.renderer.domElement.getBoundingClientRect();
+              const rect = renderer.domElement.getBoundingClientRect();
               
               let msThresholdForNotDrag = 500;
               let intersects = [];
@@ -3206,7 +3228,7 @@ export class MujocoApp {
             
       
             // Get the bounding rectangle of the canvas
-            const rect = this.renderer.domElement.getBoundingClientRect();
+            const rect = renderer.domElement.getBoundingClientRect();
       
             // Convert mouse coordinates to normalized device coordinates (-1 to +1)
             const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -3310,7 +3332,7 @@ export class MujocoApp {
             // console.log(`------------ mouseMoveEventListener ${this.enableObjectSelect}`)
             if (this.enableObjectSelect) {
             if (!this.mouseDown) { 
-              const rect = this.renderer.domElement.getBoundingClientRect();
+              const rect = renderer.domElement.getBoundingClientRect();
               
               this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
               this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -3615,16 +3637,19 @@ export class MujocoApp {
   }
 
   renderWithHUD() {
-    this.composer.render();
+    // this.composer.render();
+    this.metaRenderer.render();
 
     if (this.views.length === 0) return;
 
+    let renderer = this.metaRenderer.getRenderer();
+
     const size = new THREE.Vector2();
-    this.renderer.getSize(size);
+    renderer.getSize(size);
     const W = size.x;
     const H = size.y;
-    const wasAutoClear = this.renderer.autoClear;
-    this.renderer.autoClear = false;
+    const wasAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
 
     const p = this.camera.position;
     const t = this.controls.target;
@@ -3657,23 +3682,23 @@ export class MujocoApp {
       const w = Math.floor(v.width * W);
       const h = Math.floor(v.height * H);
       const y = Math.floor((1 - v.top - v.height) * H);
-      this.renderer.setViewport(x, y, w, h);
-      this.renderer.setScissor(x, y, w, h);
-      this.renderer.setScissorTest(true);
-      this.renderer.clear(false, true, false);
-      this.renderer.setScissorTest(false);
+      renderer.setViewport(x, y, w, h);
+      renderer.setScissor(x, y, w, h);
+      renderer.setScissorTest(true);
+      renderer.clear(false, true, false);
+      renderer.setScissorTest(false);
       const cam = this.viewCameras[i];
       if (cam) {
         cam.aspect = w / h;
         cam.updateProjectionMatrix();
-        this.renderer.render(this.scene, cam);
+        renderer.render(this.scene, cam);
       }
     }
 
-    this.renderer.setViewport(0, 0, W, H);
-    this.renderer.setScissor(0, 0, W, H);
-    this.renderer.setScissorTest(false);
-    this.renderer.autoClear = wasAutoClear;
+    renderer.setViewport(0, 0, W, H);
+    renderer.setScissor(0, 0, W, H);
+    renderer.setScissorTest(false);
+    renderer.autoClear = wasAutoClear;
   }
 
   getMujocoBodyWorldPos(name: string) {
@@ -3694,7 +3719,8 @@ export class MujocoApp {
 
   getMujocoBodyScreenPos(name: string, normalized: boolean = true) {
     let pos = this.getMujocoBodyWorldPos(name);
-    const { width, height } = this.renderer.domElement.getBoundingClientRect();
+    let renderer = this.metaRenderer.getRenderer();
+    const { width, height } = renderer.domElement.getBoundingClientRect();
     let res = worldPosToScreenPos(pos, this.camera, width, height);
     let x = res.x;
     let y = res.y;

@@ -3,14 +3,17 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 export interface Renderer {
 //    renderer: THREE.WebGLRenderer | THREE.WebGPURenderer;
 
     getRenderer(): any;
     render(): void;
-    onResize(beforeCameraUpdate: () => void): void;
+    onResize(): void;
     dispose(): void;
+    getControls(): OrbitControls;
+    getOutlinePass(): OutlinePass;
 }
 
 export class WebGLRenderer implements Renderer {
@@ -20,7 +23,9 @@ export class WebGLRenderer implements Renderer {
     outlinePass: OutlinePass;
     scene: THREE.Scene;
     camera: THREE.Camera;
+    controls: OrbitControls;
     resizeObserver: ResizeObserver;
+    beforeCameraUpdate: () => void;
 
     constructor(
         canvasElementId: string = 'mujoco-canvas',
@@ -60,6 +65,16 @@ export class WebGLRenderer implements Renderer {
             this.renderer.domElement.id = canvasElementId;
         }
 
+        this.camera.up.set(0, 0, 1);
+        this.camera.position.set(-2, 0, 2);
+    
+        this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    
+        this.controls.autoRotate = false;
+        this.controls.minDistance = 0.1;
+        this.controls.enableDamping = true;
+        this.controls.dampingFactor = 0.05;
+
         // this.renderer.autoClear = false
         this.renderer.outputColorSpace = THREE.SRGBColorSpace
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -80,13 +95,18 @@ export class WebGLRenderer implements Renderer {
         this.renderer.toneMapping = THREE.NoToneMapping;
         this.composer.addPass(new OutputPass());
 
-        this.onResize(onResizeBeforeCameraUpdateCallback);
+        this.beforeCameraUpdate = onResizeBeforeCameraUpdateCallback;
+
+        this.onResize();
 
         this.resizeObserver = new ResizeObserver(() => {
-            this.onResize(onResizeBeforeCameraUpdateCallback);
+            this.onResize();
         });
         this.resizeObserver.observe(this.canvasContainer);
 
+    }
+    getControls() {
+        return this.controls;
     }
     dispose(): void {
         if (this.renderer) {
@@ -108,7 +128,7 @@ export class WebGLRenderer implements Renderer {
         return this.outlinePass;
     }
 
-    onResize(beforeCameraUpdate: () => void) {
+    onResize() {
         if (!this.canvasContainer) return;
 
         // console.log("--------- Resize")
@@ -124,8 +144,8 @@ export class WebGLRenderer implements Renderer {
         this.composer.setSize(width, height)
         this.outlinePass.setSize(width, height)
         
-        if (beforeCameraUpdate) {
-            beforeCameraUpdate();
+        if (this.beforeCameraUpdate) {
+            this.beforeCameraUpdate();
         }
         
       
