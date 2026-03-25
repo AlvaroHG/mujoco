@@ -8,6 +8,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import loadMujoco, { MjvScene } from '../../dist/mujoco.js';
+// import {ssgi} from 'three/addons/tsl/display/SSGINode.js';
 //import * from 'three/examples/jsm/nodes/
 import type {
   MainModule,
@@ -21,6 +22,8 @@ import type {
 
 import type { CameraMode } from '../types/scene.types';
 import { CAMERA_CONFIG } from '../mujoco/cameraConfig';
+
+import {Renderer, WebGLRenderer} from "./renderer.js"
 
 /** Viewport view config: normalized (0–1) left, top, width, height and camera params */
 export interface ViewConfig {
@@ -424,6 +427,8 @@ export class MujocoApp {
   canvasContainer: any;
   resizeObserver: any;
 
+  metaRenderer: Renderer;
+
   public cameraMode: CameraMode = 'top-down';
 
   scene: THREE.Scene;
@@ -499,6 +504,20 @@ export class MujocoApp {
       newCanvas = false;
       console.log("************************ no new canvas, already exists")
     }
+
+    this.camera = new THREE.PerspectiveCamera(
+      45,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      1000
+    );
+
+    // this.metaRenderer = new WebGLRenderer(
+    //   containerElementId,
+    //   canvasContainer,
+    //   this.scene,
+    //   this.camera
+    // );
     this.renderer = new THREE.WebGLRenderer(options);
     this.renderer.setPixelRatio(window.devicePixelRatio)
     this.renderer.setSize(1, 1, false) // temp, real size set in onResize
@@ -518,12 +537,7 @@ export class MujocoApp {
       this.renderer.domElement.id = containerElementId;
     }
 
-    this.camera = new THREE.PerspectiveCamera(
-      45,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      1000
-    );
+    
 
     this.camera.up.set(0, 0, 1);
     this.camera.position.set(-2, 0, 2);
@@ -1788,15 +1802,15 @@ export class MujocoApp {
     // Optional extra viewport views (picture-in-picture). Empty = single main view only.
     this.views = [
       // Top-right quarter of the canvas
-      {
-        left: 0.5,
-        top: 0,
-        width: 0.5,
-        height: 0.5,
-        eye: [0, 0, 0],
-        up: [0, 1, 0],
-        fov: 30,
-      },
+      // {
+      //   left: 0.5,
+      //   top: 0,
+      //   width: 0.5,
+      //   height: 0.5,
+      //   eye: [0, 0, 0],
+      //   up: [0, 1, 0],
+      //   fov: 30,
+      // },
     ];
     this.viewCameras = [];
     for (const v of this.views) {
@@ -2179,7 +2193,7 @@ export class MujocoApp {
       currentMeshMaterial.color.setRGB(colorR, colorG, colorB);
       currentMeshMaterial.needsUpdate = true;
       if (!silent) {
-        console.log(`✓ TEXTURE APPLIED to mesh material: ${texturePath}`);
+        console.log(`✓ TEXTURE APPLIED to mesh '${mesh.name}' material: ${texturePath}`);
       }
 
       if (currentMeshMaterial.map !== texture) {
@@ -2225,16 +2239,13 @@ export class MujocoApp {
         texture.wrapS = THREE.RepeatWrapping;
         texture.wrapT = THREE.RepeatWrapping;
 
-        if (texturePath.includes('Apple')) {
-          console.log('---Apple');
-        }
         this.textureCacheByFilename.set(texturePath, texture);
 
         if (texId !== undefined) {
           this.textureCache.set(texId, texture);
         }
 
-        this.applyTextureToMesh(meshRef, texture, texturePath, true);
+        this.applyTextureToMesh(meshRef, texture, texturePath, false);
 
         // for (const [matId, texPath] of this.materialIdToTexturePath.entries()) {
         //   if (texPath === texturePath) {
@@ -2444,6 +2455,77 @@ export class MujocoApp {
     return String.fromCharCode(...textData.slice(nameStart, nameEnd));
   }
 
+
+  // loadTextureById(texId: number, material: THREE.MeshPhongMaterial, mesh: THREE.Mesh) {
+  //   if (this.textureCache.has(texId)) {
+  //     const texture = this.textureCache.get(texId)!;
+  //     material.map = texture;
+  //     if (material.userData.originalRgba && material.userData.originalRgba.length >= 3) {
+  //       const rgba = material.userData.originalRgba;
+  //       material.color.setRGB(rgba[0], rgba[1], rgba[2]);
+  //     } else {
+  //       material.color.setRGB(1, 1, 1);
+  //     }
+  //     material.needsUpdate = true;
+  //     return;
+  //   }
+
+  //   let texPathadr: any = (this.mjModel as any).tex_pathadr;
+  //   if (typeof texPathadr === 'function') {
+  //     texPathadr = texPathadr();
+  //   }
+    
+  //   if (!texPathadr) {
+  //     console.warn(`tex_pathadr not available for texture ${texId}`);
+  //     return;
+  //   }
+    
+  //   if (texPathadr[texId] < 0) {
+  //     console.warn(`Texture ${texId} has no path address (texPathadr[${texId}] = ${texPathadr[texId]})`);
+  //     return;
+  //   }
+    
+  //   let textAdr: any = (this.mjModel as any).text_adr;
+  //   let textData: any = (this.mjModel as any).text_data;
+  //   if (typeof textAdr === 'function') {
+  //     textAdr = textAdr();
+  //   }
+  //   if (typeof textData === 'function') {
+  //     textData = textData();
+  //   }
+    
+  //   if (!textAdr || !textData) {
+  //     console.warn(`text_adr or text_data not available for texture ${texId}`);
+  //     return;
+  //   }
+    
+  //   const pathAdr = texPathadr[texId];
+    
+  //   if (pathAdr >= 0 && pathAdr < textAdr.length) {
+  //     let pathStart = textAdr[pathAdr];
+  //     let pathEnd = pathStart;
+  //     while (pathEnd < textData.length && textData[pathEnd] !== 0) {
+  //       pathEnd++;
+  //     }
+  //     const texturePath = String.fromCharCode(...textData.slice(pathStart, pathEnd));
+  //     this.loadTextureByFilename(texturePath, material, mesh, texId);
+  //   } else {
+  //     console.warn(`Invalid pathAdr ${pathAdr} for texture ${texId} (textAdr.length = ${textAdr.length})`);
+  //   }
+  //   console.log("+++++++ end")
+  // }
+
+  loadAndApplyTextureFromMatCache(mjMatId, material, mesh, matName = null)  {
+    const loaded = this.tryLoadTextureForMaterial(mjMatId, material, mesh);
+    if (!loaded) {
+      const hasMapping = this.materialToTextureMap.has(mjMatId);
+      const matName = this.getMaterialName(mjMatId);
+      const hasNameMapping = matName ? this.materialNameToTextureMap.has(matName) : false;
+      console.log(`Could not load texture from material cache 'materialToTextureMap hasMapping ${hasMapping}' 'materialNameToTextureMap hasNameMapping' ${hasNameMapping}`)
+    }
+    return loaded;
+  }
+
   hudCircle: any;
   hudScene: any;
   hudCamera: THREE.OrthographicCamera;
@@ -2526,7 +2608,6 @@ export class MujocoApp {
           mesh.castShadow = true;
         }
         mesh.receiveShadow = true;
-
         
 
         // if (mjvGeom.matid >= 0) {
@@ -2538,11 +2619,8 @@ export class MujocoApp {
 
         if (mjvGeom.matid >= 0 && this.mjModel) {
           try {
-            const matName = this.getMaterialName(mjvGeom.matid);
+            
             let matTexid: any = (this.mjModel as any).mat_texid;
-            if (typeof matTexid === 'function') {
-              matTexid = matTexid();
-            }
 
             let texId: number = -1;
             if (matTexid) {
@@ -2562,21 +2640,10 @@ export class MujocoApp {
                   this.applyTextureToMesh(mesh, texture, `texture_${texId}`, true);
                 }
               } else {
-                // this.loadTextureById(texId, material, mesh);
+                this.loadAndApplyTextureFromMatCache(mjvGeom.matid, material, mesh)
               }
             } else {
-              const loaded = this.tryLoadTextureForMaterial(mjvGeom.matid, material, mesh);
-              if (!loaded) {
-                const hasMapping = this.materialToTextureMap.has(mjvGeom.matid);
-                const hasNameMapping = matName ? this.materialNameToTextureMap.has(matName) : false;
-                if (hasMapping || hasNameMapping) {
-                  if (matName && (matName.includes('Coffee') || matName.includes('Toaster'))) {
-                    console.warn(
-                      `^ Material ${mjvGeom.matid} (${matName}) should have texture but loading failed`
-                    );
-                  }
-                }
-              }
+              this.loadAndApplyTextureFromMatCache(mjvGeom.matid, material, mesh)
             }
           } catch (e) {
             console.error(`* Failed to load texture for material ${mjvGeom.matid}:`, e);
@@ -3128,6 +3195,8 @@ export class MujocoApp {
 
           }
 
+          
+
           // TODO for later if we want to allow clickling to any mesh
           let allMeshClickEvent = async (e: any) => {
             console.log('---- mouseup');
@@ -3228,6 +3297,9 @@ export class MujocoApp {
               }
             }
           };
+          // this.mouseupEventListener =allMeshClickEvent
+
+          
         } else {
           canvasElement.removeEventListener('mouseup', this.mouseupEventListener);
         }

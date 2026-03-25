@@ -4,26 +4,30 @@ import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
-interface Renderer {
+export interface Renderer {
 //    renderer: THREE.WebGLRenderer | THREE.WebGPURenderer;
 
     getRenderer(): any;
-    onResize(): void;
+    render(): void;
+    onResize(beforeCameraUpdate: () => void): void;
+    dispose(): void;
 }
 
-export class WebGLRenderer {
+export class WebGLRenderer implements Renderer {
     renderer: THREE.WebGLRenderer;
     canvasContainer: any;
     composer: EffectComposer;
     outlinePass: OutlinePass;
     scene: THREE.Scene;
     camera: THREE.Camera;
+    resizeObserver: ResizeObserver;
 
     constructor(
         canvasElementId: string = 'mujoco-canvas',
         canvasContainer: any = null,
         scene: THREE.Scene, 
         camera: THREE.PerspectiveCamera,
+        onResizeBeforeCameraUpdateCallback: () => void
     ) {
 
         this.scene = scene;
@@ -58,45 +62,81 @@ export class WebGLRenderer {
 
         // this.renderer.autoClear = false
         this.renderer.outputColorSpace = THREE.SRGBColorSpace
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.0
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping
+        this.renderer.toneMappingExposure = 1.0
 
-  this.composer = new EffectComposer(this.renderer);
-  this.composer.addPass(new RenderPass(this.scene, this.camera));
+        this.composer = new EffectComposer(this.renderer);
+        this.composer.addPass(new RenderPass(this.scene, this.camera));
 
-  this.outlinePass = new OutlinePass(
-    new THREE.Vector2(1, 1), // tmp onResize will set it
-    this.scene,
-    this.camera
-  )
-
-
-    this.outlinePass.selectedObjects = [];
-
-    this.renderer.toneMapping = THREE.NoToneMapping;
-    this.composer.addPass(new OutputPass());
-
-    this.onResize();
-
-    this.resizeObserver = new ResizeObserver(() => {
-      this.onResize();
-    });
-    this.resizeObserver.observe(this.canvasContainer);
-
-    this.setCameraMode(cameraMode);
-
-
+        this.outlinePass = new OutlinePass(
+            new THREE.Vector2(1, 1), // tmp onResize will set it
+            this.scene,
+            this.camera
         )
 
 
+        this.outlinePass.selectedObjects = [];
+
+        this.renderer.toneMapping = THREE.NoToneMapping;
+        this.composer.addPass(new OutputPass());
+
+        this.onResize(onResizeBeforeCameraUpdateCallback);
+
+        this.resizeObserver = new ResizeObserver(() => {
+            this.onResize(onResizeBeforeCameraUpdateCallback);
+        });
+        this.resizeObserver.observe(this.canvasContainer);
+
+    }
+    dispose(): void {
+        if (this.renderer) {
+            this.renderer.dispose();
+          }
+        if (this.composer) {
+            this.composer.dispose();
+          }
+      
+          if (this.outlinePass) {
+            this.outlinePass.dispose();
+          }
+    }
+    getRenderer() {
+        return this.renderer;
     }
 
     getOutlinePass() {
-
+        return this.outlinePass;
     }
 
-    onResize() {
+    onResize(beforeCameraUpdate: () => void) {
+        if (!this.canvasContainer) return;
 
+        // console.log("--------- Resize")
+      
+        const width = this.canvasContainer.clientWidth;
+        const height = this.canvasContainer.clientHeight;
+        // const { width, height } = this.renderer.domElement.getBoundingClientRect();
+      
+        if (width === 0 || height === 0) return;
+      
+        this.renderer.setSize(width, height, true);
+        // this.renderer.setSize(width, height, false)
+        this.composer.setSize(width, height)
+        this.outlinePass.setSize(width, height)
+        
+        if (beforeCameraUpdate) {
+            beforeCameraUpdate();
+        }
+        
+      
+        this.camera.aspect = width / height;
+        this.camera.updateProjectionMatrix();
+      
+        this.render(); // redraw immediately
     }
+
+    render() {
+        this.composer.render();
+    } 
     
 }
